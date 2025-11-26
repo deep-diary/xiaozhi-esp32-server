@@ -1,0 +1,61 @@
+@startuml MCP调用流程
+!theme plain
+
+participant LLM
+participant ConnectionHandler
+participant UnifiedToolHandler
+participant ToolManager
+participant MCPExecutor as "MCP执行器"
+participant MCPClient as "MCP客户端"
+participant MCPServer as "MCP服务器"
+
+== 设备MCP调用 ==
+
+LLM -> ConnectionHandler: Function Call (device_mcp工具)
+ConnectionHandler -> UnifiedToolHandler: handle_llm_function_call()
+UnifiedToolHandler -> ToolManager: execute_tool()
+ToolManager -> DeviceMCPExecutor: execute()
+
+DeviceMCPExecutor -> MCPClient: 调用MCP工具
+MCPClient -> MCPServer: MCP协议调用
+MCPServer --> MCPClient: 工具执行结果
+MCPClient --> DeviceMCPExecutor: 结果
+DeviceMCPExecutor --> ToolManager: ActionResponse
+
+== 服务端MCP调用 ==
+
+LLM -> ConnectionHandler: Function Call (server_mcp工具)
+ConnectionHandler -> UnifiedToolHandler: handle_llm_function_call()
+UnifiedToolHandler -> ToolManager: execute_tool()
+ToolManager -> ServerMCPExecutor: execute()
+
+ServerMCPExecutor -> MCPClient: 调用MCP工具
+MCPClient -> MCPServer: MCP协议调用
+MCPServer --> MCPClient: 工具执行结果
+MCPClient --> ServerMCPExecutor: 结果
+ServerMCPExecutor --> ToolManager: ActionResponse
+
+== MCP接入点调用 ==
+
+LLM -> ConnectionHandler: Function Call (mcp_endpoint工具)
+ConnectionHandler -> UnifiedToolHandler: handle_llm_function_call()
+UnifiedToolHandler -> ToolManager: execute_tool()
+ToolManager -> MCPEndpointExecutor: execute()
+
+MCPEndpointExecutor -> MCPEndpointExecutor: 通过WebSocket调用MCP接入点
+note right of MCPEndpointExecutor
+  MCP接入点是一个WebSocket服务
+  可以连接到外部的MCP服务器
+end note
+MCPEndpointExecutor --> ToolManager: ActionResponse
+
+ToolManager --> UnifiedToolHandler: ActionResponse
+UnifiedToolHandler --> ConnectionHandler: ActionResponse
+
+alt Action == REQLLM
+    ConnectionHandler -> LLM: chat(depth+1)
+    LLM --> ConnectionHandler: 最终回复
+end
+
+@enduml
+

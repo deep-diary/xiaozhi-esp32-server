@@ -1,0 +1,41 @@
+@startuml 意图识别决策流程
+!theme plain
+
+start
+
+:用户输入文本;
+
+if (intent_type == "function_call"?) then (是)
+    :直接进入LLM对话流程;
+    :LLM自动决定是否调用工具;
+    stop
+else (否)
+    :进入意图识别流程;
+    
+    if (intent_type == "intent_llm"?) then (是)
+        :使用独立的LLM进行意图识别;
+        :分析用户意图;
+        
+        if (识别到需要调用工具?) then (是)
+            :返回function_call JSON;
+            :执行工具;
+            
+            if (Action == REQLLM?) then (是)
+                :使用主LLM生成回复;
+            else (否)
+                :直接回复用户;
+            endif
+        else (否)
+            :返回continue_chat;
+            :进入常规对话流程;
+        endif
+    else (否, nointent)
+        :不使用意图识别;
+        :直接进入常规对话流程;
+    endif
+endif
+
+stop
+
+@enduml
+

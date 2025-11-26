@@ -1,0 +1,82 @@
+@startuml 完整对话流程
+!theme plain
+
+actor 客户端 as Client
+participant WebSocketServer
+participant ConnectionHandler
+participant VAD
+participant ASR
+participant IntentHandler
+participant LLM
+participant UnifiedToolHandler
+participant ToolExecutor
+participant PluginFunction
+participant TTS
+
+Client -> WebSocketServer: WebSocket连接请求
+WebSocketServer -> WebSocketServer: 认证授权
+WebSocketServer -> ConnectionHandler: 创建连接处理器
+WebSocketServer -> ConnectionHandler: 初始化组件(VAD/ASR/LLM/TTS/Memory/Intent)
+
+Client -> ConnectionHandler: 发送音频数据(bytes)
+ConnectionHandler -> VAD: 检测语音活动
+VAD --> ConnectionHandler: have_voice: bool
+ConnectionHandler -> ASR: 接收音频
+ASR -> ASR: 识别处理
+ASR --> ConnectionHandler: 识别结果(文本)
+
+alt intent_type == "function_call"
+    ConnectionHandler -> LLM: response_with_functions(dialogue, functions)
+    LLM --> ConnectionHandler: 流式响应(文本或Function Call)
+    
+    alt 检测到Function Call
+        ConnectionHandler -> UnifiedToolHandler: handle_llm_function_call()
+        UnifiedToolHandler -> ToolManager: execute_tool()
+        ToolManager -> ToolExecutor: execute()
+        ToolExecutor -> PluginFunction: 调用函数
+        PluginFunction --> ToolExecutor: ActionResponse
+        ToolExecutor --> ToolManager: ActionResponse
+        ToolManager --> UnifiedToolHandler: ActionResponse
+        
+        alt Action == REQLLM
+            UnifiedToolHandler --> ConnectionHandler: 工具执行结果
+            ConnectionHandler -> LLM: chat(depth+1) 递归调用
+            LLM --> ConnectionHandler: 最终回复
+        else Action == RESPONSE
+            UnifiedToolHandler --> ConnectionHandler: 直接回复
+        end
+    end
+    
+else intent_type == "intent_llm"
+    ConnectionHandler -> IntentHandler: handle_user_intent(text)
+    IntentHandler -> IntentLLM: detect_intent(dialogue, text)
+    IntentLLM -> LLM: 意图识别LLM调用
+    LLM --> IntentLLM: 意图识别结果(JSON)
+    IntentLLM --> IntentHandler: function_call JSON
+    
+    alt 需要调用工具
+        IntentHandler -> UnifiedToolHandler: handle_llm_function_call()
+        UnifiedToolHandler -> ToolExecutor: execute()
+        ToolExecutor -> PluginFunction: 调用函数
+        PluginFunction --> ToolExecutor: ActionResponse
+        ToolExecutor --> UnifiedToolHandler: ActionResponse
+        
+        alt Action == REQLLM
+            UnifiedToolHandler -> IntentLLM: replyResult(工具结果, 原始文本)
+            IntentLLM -> LLM: 生成自然语言回复
+            LLM --> IntentLLM: 回复文本
+            IntentLLM --> IntentHandler: 回复文本
+        end
+    else continue_chat
+        IntentHandler -> LLM: 常规对话
+        LLM --> IntentHandler: 回复文本
+    end
+end
+
+ConnectionHandler -> TTS: tts_one_sentence(文本)
+TTS -> TTS: 文本转语音
+TTS --> ConnectionHandler: 音频数据
+ConnectionHandler -> Client: 发送音频数据
+
+@enduml
+

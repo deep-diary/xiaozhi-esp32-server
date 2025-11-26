@@ -1,0 +1,52 @@
+@startuml 音频处理流程
+!theme plain
+
+start
+
+:接收音频数据(bytes);
+
+:VAD检测;
+
+if (检测到语音?) then (是)
+    :更新活动时间;
+    
+    if (正在播放TTS?) then (是)
+        if (listen_mode == "manual"?) then (是)
+            :不中断;
+        else (否)
+            :中断当前播放;
+        endif
+    endif
+    
+    :将音频加入ASR队列;
+    
+    if (ASR类型?) then
+        if (流式ASR?) then (是)
+            :实时识别;
+            :部分结果回调;
+        else (非流式ASR?) then (是)
+            :等待完整音频;
+            :一次性识别;
+        endif
+    endif
+    
+    :ASR识别完成;
+    :获取识别文本;
+    
+    :进入对话流程;
+else (否)
+    :检查超时;
+    
+    if (超时?) then (是)
+        :发送结束提示;
+        :关闭连接;
+        stop
+    else (否)
+        :继续等待;
+    endif
+endif
+
+stop
+
+@enduml
+

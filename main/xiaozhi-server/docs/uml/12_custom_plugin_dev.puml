@@ -1,0 +1,43 @@
+@startuml 自定义插件开发流程
+!theme plain
+
+start
+
+:在custom/functions/目录创建插件文件;
+
+:定义函数描述(FUNCTION_DESC);
+
+:使用@register_function装饰器注册函数;
+
+:实现函数逻辑;
+
+if (需要conn参数?) then (是)
+    :使用ToolType.SYSTEM_CTL或IOT_CTL;
+else (否)
+    :使用ToolType.WAIT或其他;
+endif
+
+:在config.yaml中添加函数名;
+
+:重启服务器;
+
+if (插件加载成功?) then (是)
+    :查看日志确认;
+    :测试功能;
+    
+    if (功能正常?) then (是)
+        :开发完成;
+        stop
+    else (否)
+        :调试问题;
+        :修改代码;
+        :重新测试;
+    endif
+else (否)
+    :检查错误日志;
+    :修复问题;
+    :重新加载;
+endif
+
+@enduml
+

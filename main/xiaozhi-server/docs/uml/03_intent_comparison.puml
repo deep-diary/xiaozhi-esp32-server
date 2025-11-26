@@ -1,0 +1,88 @@
+@startuml 意图识别流程对比
+!theme plain
+
+== intent_llm 模式 ==
+
+actor 用户
+participant ConnectionHandler
+participant IntentHandler
+participant IntentLLM
+participant IntentLLM_LLM as "意图识别LLM"
+participant UnifiedToolHandler
+participant ToolExecutor
+participant PluginFunction
+participant MainLLM as "主LLM"
+
+用户 -> ConnectionHandler: 用户输入文本
+ConnectionHandler -> IntentHandler: handle_user_intent(text)
+IntentHandler -> IntentLLM: detect_intent(dialogue, text)
+
+note right of IntentLLM
+  使用独立的LLM进行意图识别
+  分析用户意图，决定是否需要调用工具
+end note
+
+IntentLLM -> IntentLLM_LLM: 意图识别调用
+IntentLLM_LLM --> IntentLLM: 返回JSON格式的意图结果
+IntentLLM --> IntentHandler: {"function_call": {"name": "xxx", "arguments": {...}}}
+
+alt 需要调用工具
+    IntentHandler -> UnifiedToolHandler: handle_llm_function_call()
+    UnifiedToolHandler -> ToolExecutor: execute()
+    ToolExecutor -> PluginFunction: 调用函数
+    PluginFunction --> ToolExecutor: ActionResponse
+    ToolExecutor --> UnifiedToolHandler: ActionResponse
+    
+    alt Action == REQLLM
+        UnifiedToolHandler -> IntentLLM: replyResult(工具结果, 原始文本)
+        IntentLLM -> MainLLM: 生成自然语言回复
+        MainLLM --> IntentLLM: 回复文本
+        IntentLLM --> IntentHandler: 回复文本
+    end
+else continue_chat
+    IntentHandler -> MainLLM: 常规对话
+    MainLLM --> IntentHandler: 回复文本
+end
+
+IntentHandler --> ConnectionHandler: 回复文本
+
+== function_call 模式 ==
+
+actor 用户2 as "用户"
+participant ConnectionHandler2 as "ConnectionHandler"
+participant MainLLM2 as "主LLM(支持Function Calling)"
+participant UnifiedToolHandler2 as "UnifiedToolHandler"
+participant ToolExecutor2 as "ToolExecutor"
+participant PluginFunction2 as "PluginFunction"
+
+用户2 -> ConnectionHandler2: 用户输入文本
+ConnectionHandler2 -> MainLLM2: response_with_functions(dialogue, functions)
+
+note right of MainLLM2
+  主LLM在生成回复过程中
+  自动决定是否需要调用工具
+  无需额外的意图识别步骤
+end note
+
+MainLLM2 --> ConnectionHandler2: 流式响应
+
+alt 检测到Function Call
+    ConnectionHandler2 -> UnifiedToolHandler2: handle_llm_function_call()
+    UnifiedToolHandler2 -> ToolExecutor2: execute()
+    ToolExecutor2 -> PluginFunction2: 调用函数
+    PluginFunction2 --> ToolExecutor2: ActionResponse
+    ToolExecutor2 --> UnifiedToolHandler2: ActionResponse
+    
+    alt Action == REQLLM
+        UnifiedToolHandler2 --> ConnectionHandler2: 工具执行结果
+        ConnectionHandler2 -> MainLLM2: chat(depth+1) 递归调用
+        MainLLM2 --> ConnectionHandler2: 最终回复
+    end
+else 普通文本回复
+    MainLLM2 --> ConnectionHandler2: 直接回复文本
+end
+
+ConnectionHandler2 --> 用户2: 回复
+
+@enduml
+

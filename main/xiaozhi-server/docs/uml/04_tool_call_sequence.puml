@@ -1,0 +1,76 @@
+@startuml 工具调用流程
+!theme plain
+
+participant LLM
+participant ConnectionHandler
+participant UnifiedToolHandler
+participant ToolManager
+participant ToolExecutor
+participant ServerPluginExecutor
+participant DeviceIoTExecutor
+participant DeviceMCPExecutor
+participant ServerMCPExecutor
+participant MCPEndpointExecutor
+participant FunctionRegistry
+participant PluginFunction
+participant MCPClient
+
+LLM -> ConnectionHandler: Function Call请求
+ConnectionHandler -> UnifiedToolHandler: handle_llm_function_call(function_call_data)
+
+UnifiedToolHandler -> UnifiedToolHandler: 解析function_name和arguments
+UnifiedToolHandler -> ToolManager: execute_tool(tool_name, arguments)
+
+ToolManager -> ToolManager: get_tool_type(tool_name)
+
+alt tool_type == SERVER_PLUGIN
+    ToolManager -> ServerPluginExecutor: execute(conn, tool_name, arguments)
+    ServerPluginExecutor -> FunctionRegistry: get_function(tool_name)
+    FunctionRegistry --> ServerPluginExecutor: FunctionItem
+    ServerPluginExecutor -> PluginFunction: 调用函数
+    PluginFunction --> ServerPluginExecutor: ActionResponse
+    
+else tool_type == DEVICE_IOT
+    ToolManager -> DeviceIoTExecutor: execute(conn, tool_name, arguments)
+    DeviceIoTExecutor -> DeviceIoTExecutor: 查找IoT设备描述符
+    DeviceIoTExecutor -> PluginFunction: 调用IoT控制函数
+    PluginFunction --> DeviceIoTExecutor: ActionResponse
+    
+else tool_type == DEVICE_MCP
+    ToolManager -> DeviceMCPExecutor: execute(conn, tool_name, arguments)
+    DeviceMCPExecutor -> MCPClient: 调用MCP工具
+    MCPClient --> DeviceMCPExecutor: 结果
+    DeviceMCPExecutor -> DeviceMCPExecutor: 转换为ActionResponse
+    
+else tool_type == SERVER_MCP
+    ToolManager -> ServerMCPExecutor: execute(conn, tool_name, arguments)
+    ServerMCPExecutor -> MCPClient: 调用MCP工具
+    MCPClient --> ServerMCPExecutor: 结果
+    ServerMCPExecutor -> ServerMCPExecutor: 转换为ActionResponse
+    
+else tool_type == MCP_ENDPOINT
+    ToolManager -> MCPEndpointExecutor: execute(conn, tool_name, arguments)
+    MCPEndpointExecutor -> MCPEndpointExecutor: 通过WebSocket调用MCP接入点
+    MCPEndpointExecutor --> MCPEndpointExecutor: 结果
+end
+
+ToolExecutor --> ToolManager: ActionResponse
+ToolManager --> UnifiedToolHandler: ActionResponse
+
+alt Action == REQLLM
+    UnifiedToolHandler --> ConnectionHandler: 工具执行结果
+    ConnectionHandler -> ConnectionHandler: 添加到对话历史
+    ConnectionHandler -> LLM: chat(depth+1) 递归调用
+    LLM --> ConnectionHandler: 最终回复
+    
+else Action == RESPONSE
+    UnifiedToolHandler --> ConnectionHandler: 直接回复文本
+    ConnectionHandler -> ConnectionHandler: 通过TTS回复用户
+    
+else Action == ERROR
+    UnifiedToolHandler --> ConnectionHandler: 错误信息
+    ConnectionHandler -> ConnectionHandler: 错误处理
+end
+
+@enduml
+

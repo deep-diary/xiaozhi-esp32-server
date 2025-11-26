@@ -1,0 +1,246 @@
+@startuml 核心类图
+!theme plain
+
+package "入口层" {
+    class app {
+        +main()
+        +wait_for_exit()
+    }
+}
+
+package "服务器层" {
+    class WebSocketServer {
+        -config: dict
+        -_vad: VADProvider
+        -_asr: ASRProvider
+        -_llm: LLMProvider
+        -_memory: MemoryProvider
+        -_intent: IntentProvider
+        -auth: AuthManager
+        +start()
+        +_handle_connection()
+        +update_config()
+        +_handle_auth()
+    }
+}
+
+package "连接处理层" {
+    class ConnectionHandler {
+        -session_id: str
+        -device_id: str
+        -client_ip: str
+        -websocket: WebSocket
+        -vad: VADProvider
+        -asr: ASRProvider
+        -llm: LLMProvider
+        -tts: TTSProvider
+        -memory: MemoryProvider
+        -intent: IntentProvider
+        -dialogue: Dialogue
+        -func_handler: UnifiedToolHandler
+        +handle_connection()
+        +_route_message()
+        +chat()
+        +_initialize_components()
+    }
+    
+    class Dialogue {
+        -dialogue: List[Message]
+        -system_message: str
+        +put(message: Message)
+        +get_llm_dialogue_with_memory()
+    }
+    
+    class Message {
+        +role: str
+        +content: str
+        +tool_calls: List[Dict]
+    }
+}
+
+package "核心模块层" {
+    abstract class VADProvider {
+        +is_vad(conn, audio): bool
+    }
+    
+    abstract class ASRProvider {
+        +receive_audio(conn, audio, have_voice)
+        +open_audio_channels(conn)
+    }
+    
+    abstract class LLMProvider {
+        +response(session_id, dialogue)
+        +response_with_functions(session_id, dialogue, functions)
+    }
+    
+    abstract class TTSProvider {
+        +tts_one_sentence(conn, content_type, content_detail)
+        +open_audio_channels(conn)
+    }
+    
+    abstract class MemoryProvider {
+        +query_memory(query): str
+        +save_memory(dialogue)
+        +init_memory(role_id, llm, summary_memory)
+    }
+    
+    abstract class IntentProviderBase {
+        +detect_intent(conn, dialogue_history, text): str
+    }
+    
+    class SileroVAD {
+        +is_vad(conn, audio): bool
+    }
+    
+    class FunASR {
+        +receive_audio(conn, audio, have_voice)
+    }
+    
+    class ChatGLMLLM {
+        +response(session_id, dialogue)
+        +response_with_functions(session_id, dialogue, functions)
+    }
+    
+    class EdgeTTS {
+        +tts_one_sentence(conn, content_type, content_detail)
+    }
+    
+    class MemLocalShort {
+        +query_memory(query): str
+        +save_memory(dialogue)
+    }
+    
+    class IntentLLM {
+        -llm: LLMProvider
+        +detect_intent(conn, dialogue_history, text): str
+    }
+    
+    class FunctionCallIntent {
+        +detect_intent(conn, dialogue_history, text): str
+    }
+}
+
+package "工具系统层" {
+    class UnifiedToolHandler {
+        -tool_manager: ToolManager
+        -server_plugin_executor: ServerPluginExecutor
+        -device_iot_executor: DeviceIoTExecutor
+        -device_mcp_executor: DeviceMCPExecutor
+        -server_mcp_executor: ServerMCPExecutor
+        -mcp_endpoint_executor: MCPEndpointExecutor
+        +get_functions()
+        +handle_llm_function_call(conn, function_call_data)
+        +_initialize()
+    }
+    
+    class ToolManager {
+        -executors: Dict[ToolType, ToolExecutor]
+        +register_executor(tool_type, executor)
+        +execute_tool(tool_name, arguments)
+        +get_all_tools()
+    }
+    
+    abstract class ToolExecutor {
+        +execute(conn, tool_name, arguments): ActionResponse
+        +get_tools(): Dict[str, ToolDefinition]
+    }
+    
+    class ServerPluginExecutor {
+        +execute(conn, tool_name, arguments): ActionResponse
+        +get_tools(): Dict[str, ToolDefinition]
+    }
+    
+    class DeviceIoTExecutor {
+        +execute(conn, tool_name, arguments): ActionResponse
+        +register_iot_tools(descriptors)
+    }
+    
+    class DeviceMCPExecutor {
+        +execute(conn, tool_name, arguments): ActionResponse
+    }
+    
+    class ServerMCPExecutor {
+        +execute(conn, tool_name, arguments): ActionResponse
+        +initialize()
+    }
+    
+    class MCPEndpointExecutor {
+        +execute(conn, tool_name, arguments): ActionResponse
+    }
+}
+
+package "插件系统层" {
+    class FunctionRegistry {
+        -function_registry: Dict[str, FunctionItem]
+        +register_function(name, func_item)
+        +get_function(name): FunctionItem
+    }
+    
+    class FunctionItem {
+        +name: str
+        +description: dict
+        +func: callable
+        +type: ToolType
+    }
+    
+    enum ToolType {
+        NONE
+        WAIT
+        CHANGE_SYS_PROMPT
+        SYSTEM_CTL
+        IOT_CTL
+        MCP_CLIENT
+    }
+    
+    enum Action {
+        ERROR
+        NOTFOUND
+        NONE
+        RESPONSE
+        REQLLM
+    }
+    
+    class ActionResponse {
+        +action: Action
+        +result: Any
+        +response: str
+    }
+}
+
+' 关系定义
+app --> WebSocketServer
+WebSocketServer --> ConnectionHandler
+ConnectionHandler --> Dialogue
+Dialogue --> Message
+ConnectionHandler --> VADProvider
+ConnectionHandler --> ASRProvider
+ConnectionHandler --> LLMProvider
+ConnectionHandler --> TTSProvider
+ConnectionHandler --> MemoryProvider
+ConnectionHandler --> IntentProviderBase
+ConnectionHandler --> UnifiedToolHandler
+
+VADProvider <|-- SileroVAD
+ASRProvider <|-- FunASR
+LLMProvider <|-- ChatGLMLLM
+TTSProvider <|-- EdgeTTS
+MemoryProvider <|-- MemLocalShort
+IntentProviderBase <|-- IntentLLM
+IntentProviderBase <|-- FunctionCallIntent
+
+UnifiedToolHandler --> ToolManager
+ToolManager --> ToolExecutor
+ToolExecutor <|-- ServerPluginExecutor
+ToolExecutor <|-- DeviceIoTExecutor
+ToolExecutor <|-- DeviceMCPExecutor
+ToolExecutor <|-- ServerMCPExecutor
+ToolExecutor <|-- MCPEndpointExecutor
+
+ServerPluginExecutor --> FunctionRegistry
+FunctionRegistry --> FunctionItem
+FunctionItem --> ToolType
+FunctionItem --> ActionResponse
+ActionResponse --> Action
+
+@enduml
+

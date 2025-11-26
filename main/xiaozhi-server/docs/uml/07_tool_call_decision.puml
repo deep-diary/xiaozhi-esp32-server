@@ -1,0 +1,59 @@
+@startuml 工具调用决策流程
+!theme plain
+
+start
+
+:收到Function Call请求;
+
+:解析function_name和arguments;
+
+:查找工具类型;
+
+if (工具类型?) then
+    if (SERVER_PLUGIN?) then (是)
+        :ServerPluginExecutor执行;
+        :从FunctionRegistry获取函数;
+        :调用插件函数;
+    elseif (DEVICE_IOT?) then (是)
+        :DeviceIoTExecutor执行;
+        :查找IoT设备描述符;
+        :调用IoT控制函数;
+    elseif (DEVICE_MCP?) then (是)
+        :DeviceMCPExecutor执行;
+        :通过MCP客户端调用;
+    elseif (SERVER_MCP?) then (是)
+        :ServerMCPExecutor执行;
+        :通过MCP客户端调用;
+    elseif (MCP_ENDPOINT?) then (是)
+        :MCPEndpointExecutor执行;
+        :通过WebSocket调用MCP接入点;
+    else (未找到)
+        :返回NOTFOUND;
+        stop
+    endif
+else (未找到)
+    :返回NOTFOUND;
+    stop
+endif
+
+:执行工具函数;
+
+if (执行成功?) then (是)
+    if (Action == REQLLM?) then (是)
+        :将结果添加到对话历史;
+        :递归调用chat(depth+1);
+        :LLM生成最终回复;
+    elseif (Action == RESPONSE?) then (是)
+        :直接通过TTS回复用户;
+    else (其他)
+        :根据Action类型处理;
+    endif
+else (否)
+    :返回ERROR;
+    :错误处理;
+endif
+
+stop
+
+@enduml
+

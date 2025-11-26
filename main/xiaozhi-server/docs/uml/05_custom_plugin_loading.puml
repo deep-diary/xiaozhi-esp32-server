@@ -1,0 +1,50 @@
+@startuml 自定义插件加载流程
+!theme plain
+
+participant app
+participant WebSocketServer
+participant ConnectionHandler
+participant UnifiedToolHandler
+participant loadplugins
+participant FunctionRegistry
+participant CustomPlugin as "custom/functions/my_custom_plugin.py"
+
+app -> WebSocketServer: 启动服务器
+WebSocketServer -> WebSocketServer: 初始化核心模块
+
+WebSocketServer -> ConnectionHandler: 创建连接处理器
+ConnectionHandler -> UnifiedToolHandler: 创建工具处理器
+UnifiedToolHandler -> UnifiedToolHandler: _initialize()
+
+note right of UnifiedToolHandler
+  1. 先加载系统插件
+  2. 再加载自定义插件
+end note
+
+UnifiedToolHandler -> loadplugins: auto_import_modules("plugins_func.functions")
+loadplugins -> loadplugins: 扫描plugins_func/functions目录
+loadplugins -> loadplugins: 导入所有Python模块
+
+UnifiedToolHandler -> loadplugins: auto_import_modules("custom.functions")
+loadplugins -> loadplugins: 扫描custom/functions目录
+loadplugins -> CustomPlugin: 导入my_custom_plugin.py
+
+CustomPlugin -> FunctionRegistry: @register_function装饰器
+note right of CustomPlugin
+  注册函数:
+  - get_system_info
+  - calculate
+  - process_text
+end note
+
+FunctionRegistry -> FunctionRegistry: 添加到all_function_registry
+
+UnifiedToolHandler -> UnifiedToolHandler: 初始化各类执行器
+UnifiedToolHandler -> ServerPluginExecutor: 注册到ToolManager
+ServerPluginExecutor -> FunctionRegistry: get_tools()
+FunctionRegistry --> ServerPluginExecutor: 所有注册的函数(包括自定义)
+
+UnifiedToolHandler -> UnifiedToolHandler: 输出当前支持的所有工具列表
+
+@enduml
+
