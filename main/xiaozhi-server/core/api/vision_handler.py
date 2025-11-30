@@ -6,6 +6,7 @@ from core.utils.util import get_vision_url, is_valid_image_file
 from core.utils.vllm import create_instance
 from config.config_loader import get_private_config_from_api
 from core.utils.auth import AuthToken
+from core.utils.immich_client import ImmichClient
 import base64
 from typing import Tuple, Optional
 from plugins_func.register import Action
@@ -22,6 +23,9 @@ class VisionHandler:
         self.logger = setup_logging()
         # 初始化认证工具
         self.auth = AuthToken(config["server"]["auth_key"])
+        # 初始化Immich客户端
+        immich_config = config.get("Immich", {})
+        self.immich_client = ImmichClient(immich_config) if immich_config else None
 
     def _create_error_response(self, message: str) -> dict:
         """创建统一的错误响应格式"""
@@ -65,7 +69,7 @@ class VisionHandler:
             if question_field is None:
                 raise ValueError("缺少问题字段")
             question = await question_field.text()
-            self.logger.bind(tag=TAG).debug(f"Question: {question}")
+            self.logger.bind(tag=TAG).info(f"Question: {question}")
 
             # 读取图片文件
             image_field = await reader.next()
@@ -91,6 +95,50 @@ class VisionHandler:
 
             # 将图片转换为base64编码
             image_base64 = base64.b64encode(image_data).decode("utf-8")
+
+            # 调用Immich API上传图片并识别人物
+            people_info = None
+            if self.immich_client and self.immich_client.enabled:
+                try:
+                    self.logger.bind(tag=TAG).info("开始上传图片到Immich并识别人物")
+                    people_info = await self.immich_client.upload_and_recognize_people(image_data)
+                    if people_info.get("success"):
+                        people_count = len(people_info.get("people", []))
+                        self.logger.bind(tag=TAG).info(
+                            f"Immich识别完成: 资产ID={people_info.get('asset_id')}, "
+                            f"识别到{people_count}个人物"
+                        )
+                    else:
+                        self.logger.bind(tag=TAG).warning(
+                            f"Immich识别失败: {people_info.get('message')}"
+                        )
+                except Exception as e:
+                    self.logger.bind(tag=TAG).error(f"Immich识别异常: {e}")
+                    people_info = None
+
+            # 如果识别到人物，将人物信息整合到question中，让VLLM在回答中包含人物信息
+            people_names = []
+            if people_info and people_info.get("success") and people_info.get("people"):
+                people_list = people_info.get("people", [])
+                # 只提取有效的人物名称（排除"未命名"和空值）
+                people_names = [
+                    p.get("person_name") 
+                    for p in people_list 
+                    if p.get("person_name") and p.get("person_name") != "未命名"
+                ]
+                if people_names:
+                    # 优化question构建，更明确地要求VLLM提及人物
+                    if "人物" not in question and "人" not in question:
+                        # 如果原问题没有涉及人物，添加明确的人物描述要求
+                        people_str = "、".join(people_names)
+                        question = f"{question}\n\n注意：这张图片中识别到了以下人物：{people_str}。请在你的回答中明确提及这些人物，并结合他们来描述图片内容。"
+                    else:
+                        # 如果原问题已经涉及人物，添加人物列表
+                        people_str = "、".join(people_names)
+                        question = f"{question}\n\n[已识别的人物：{people_str}]"
+                    self.logger.bind(tag=TAG).info(f"已将人物信息添加到question中: {people_names}")
+                else:
+                    self.logger.bind(tag=TAG).info("识别到人物但均为未命名，不添加到question中")
 
             # 如果开启了智控台，则从智控台获取模型配置
             current_config = copy.deepcopy(self.config)
@@ -120,7 +168,22 @@ class VisionHandler:
             )
 
             result = vllm.response(question, image_base64)
+            # 打印result
+            self.logger.bind(tag=TAG).info(f"VLLM识别结果: {result}")
 
+            # 如果识别到人物但VLLM回答中没有提及，在结果中补充人物信息
+            if people_names and result:
+                # 检查结果中是否包含人物名称
+                result_lower = result.lower()
+                people_mentioned = any(name.lower() in result_lower for name in people_names)
+                
+                if not people_mentioned:
+                    # 如果VLLM没有提及人物，在结果末尾补充
+                    people_str = "、".join(people_names)
+                    result = f"{result}\n\n[识别到的人物：{people_str}]"
+                    self.logger.bind(tag=TAG).info(f"VLLM回答中未提及人物，已补充人物信息: {people_names}")
+
+            # 构建返回结果，保持原有协议不变
             return_json = {
                 "success": True,
                 "action": Action.RESPONSE.name,
