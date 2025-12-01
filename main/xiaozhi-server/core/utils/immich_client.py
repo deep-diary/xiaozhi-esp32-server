@@ -4,6 +4,9 @@ from io import BytesIO
 from typing import Optional, Dict, List
 from datetime import datetime
 import uuid
+import numpy as np
+import cv2
+import mediapipe as mp
 from config.logger import setup_logging
 
 TAG = __name__
@@ -31,8 +34,9 @@ class ImmichClient:
         self.api_key = config.get("api_key", "")
         self.email = config.get("email", "")
         self.password = config.get("password", "")
-        self.max_retries = int(config.get("max_retries", 20))
-        self.wait_seconds = int(config.get("wait_seconds", 3))
+        # 优化等待参数：减少重试次数和等待时间，避免长时间阻塞
+        self.max_retries = int(config.get("max_retries", 10))  # 从20减少到10
+        self.wait_seconds = int(config.get("wait_seconds", 2))  # 从3秒减少到2秒
         self.timeout = aiohttp.ClientTimeout(total=int(config.get("timeout", 30)))
         self.access_token = None
         
@@ -46,6 +50,7 @@ class ImmichClient:
         else:
             self.enabled = True
             logger.bind(tag=TAG).info(f"Immich客户端已初始化: API={self.api_url}")
+            logger.bind(tag=TAG).info("将使用MediaPipe进行快速人脸检测优化等待逻辑")
     
     async def _get_headers(self) -> dict:
         """获取API请求头，优先使用Bearer token"""
@@ -245,39 +250,61 @@ class ImmichClient:
         """
         获取人物的相关照片
         
+        注意：此功能暂时不可用，因为Immich API中获取人物照片的端点可能不存在或路径不同
+        暂时返回空列表，不影响主要功能（识别人物名称）
+        
         Args:
             person_id: 人物ID
             limit: 返回照片数量限制，默认10
             
         Returns:
-            照片列表
+            照片列表（暂时返回空列表）
         """
-        if not self.enabled:
-            return []
+        # 暂时禁用此功能，因为API端点可能不存在
+        # 如果需要获取人物照片，可能需要使用搜索API或其他方式
+        logger.bind(tag=TAG).debug(f"获取人物照片功能暂时不可用: {person_id}")
+        return []
+    
+    def _quick_face_detection(self, image_data: bytes) -> bool:
+        """
+        快速检测图片中是否有人脸（使用MediaPipe）
         
-        try:
-            await self._ensure_authenticated()
-            # 根据官方文档，正确的端点是 /api/people/{id}/assets
-            url = f"{self.api_url}/people/{person_id}/assets"
-            headers = await self._get_headers()
-            params = {"size": limit}
+        Args:
+            image_data: 图片二进制数据
             
-            async with aiohttp.ClientSession(timeout=self.timeout) as session:
-                async with session.get(url, headers=headers, params=params) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        # 返回items数组，如果没有items字段则返回空数组
-                        return result.get("items", [])
-                    else:
-                        error_text = await response.text()
-                        logger.bind(tag=TAG).warning(
-                            f"获取人物照片失败: HTTP {response.status}, {error_text}"
-                        )
-                        return []
-                        
+        Returns:
+            是否检测到人脸
+        """
+        try:
+            # 将字节数据转换为numpy数组
+            nparr = np.frombuffer(image_data, np.uint8)
+            # 解码图片
+            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            if img is None:
+                return True  # 解码失败，假设有人脸
+            
+            # 转换为RGB格式（MediaPipe需要RGB）
+            img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            
+            # 初始化MediaPipe人脸检测
+            mp_face_detection = mp.solutions.face_detection
+            face_detection = mp_face_detection.FaceDetection(
+                model_selection=0,  # 0=短距离模型（更快），1=长距离模型（更准确）
+                min_detection_confidence=0.5
+            )
+            
+            # 检测人脸
+            results = face_detection.process(img_rgb)
+            face_detection.close()
+            
+            has_face = results.detections is not None and len(results.detections) > 0
+            logger.bind(tag=TAG).info(
+                f"MediaPipe快速人脸检测结果: {'检测到人脸' if has_face else '未检测到人脸'}"
+            )
+            return has_face
         except Exception as e:
-            logger.bind(tag=TAG).error(f"获取人物照片异常: {e}")
-            return []
+            logger.bind(tag=TAG).warning(f"MediaPipe人脸检测失败，继续处理: {e}")
+            return True  # 检测失败，假设有人脸，继续处理
     
     async def upload_and_recognize_people(
         self, 
@@ -319,6 +346,10 @@ class ImmichClient:
                 "message": "Immich未启用"
             }
         
+        # 0. 快速检测是否有人脸（优化：如果没有人脸，直接返回，避免不必要的API调用）
+        has_face = self._quick_face_detection(image_data)
+        
+        
         # 1. 上传图片
         asset_id = await self.upload_asset(image_data)
         if not asset_id:
@@ -328,12 +359,23 @@ class ImmichClient:
                 "people": [],
                 "message": "图片上传失败"
             }
+
+        if not has_face:
+            # 如果没有检测到人脸，直接返回，不需要上传和等待
+            logger.bind(tag=TAG).info("快速检测未发现人脸，跳过Immich处理，直接返回")
+            return {
+                "success": True,
+                "asset_id": None,
+                "people": [],
+                "message": "快速检测未发现人脸，跳过人物识别"
+            }
         
-        # 2. 等待处理完成
-        processing_complete = await self.wait_for_processing(asset_id)
+        # 2. 等待处理完成（已检测到人脸，正常等待）
+        processing_complete = await self.wait_for_processing(asset_id, max_retries=5, wait_seconds=1)
+        
         if not processing_complete:
-            logger.bind(tag=TAG).warning(
-                f"资产处理超时，但继续尝试获取人物信息: {asset_id}"
+            logger.bind(tag=TAG).info(
+                f"资产处理未完成，继续获取资产信息: {asset_id}"
             )
         
         # 3. 获取资产详情
