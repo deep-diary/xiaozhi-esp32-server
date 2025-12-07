@@ -236,6 +236,7 @@ class ConnectionHandler:
         """保存记忆并关闭连接"""
         try:
             if self.memory:
+                self.logger.bind(tag=TAG).info("开始保存记忆，对话轮数: %d", len(self.dialogue.dialogue))
                 # 使用线程池异步保存记忆
                 def save_memory_task():
                     try:
@@ -245,6 +246,7 @@ class ConnectionHandler:
                         loop.run_until_complete(
                             self.memory.save_memory(self.dialogue.dialogue)
                         )
+                        self.logger.bind(tag=TAG).info("记忆保存成功")
                     except Exception as e:
                         self.logger.bind(tag=TAG).error(f"保存记忆失败: {e}")
                     finally:
@@ -255,6 +257,8 @@ class ConnectionHandler:
 
                 # 启动线程保存记忆，不等待完成
                 threading.Thread(target=save_memory_task, daemon=True).start()
+            else:
+                self.logger.bind(tag=TAG).info("记忆模块未配置，跳过保存")
         except Exception as e:
             self.logger.bind(tag=TAG).error(f"保存记忆失败: {e}")
         finally:
@@ -472,9 +476,20 @@ class ConnectionHandler:
 
     def _init_report_threads(self):
         """初始化ASR和TTS上报线程"""
+        self.logger.bind(tag=TAG).info(
+            f"上报配置检查: read_config_from_api={self.read_config_from_api}, "
+            f"need_bind={self.need_bind}, chat_history_conf={self.chat_history_conf}, "
+            f"report_asr_enable={self.report_asr_enable}, report_tts_enable={self.report_tts_enable}"
+        )
         if not self.read_config_from_api or self.need_bind:
+            self.logger.bind(tag=TAG).warning(
+                f"上报线程未启动: read_config_from_api={self.read_config_from_api}, need_bind={self.need_bind}"
+            )
             return
         if self.chat_history_conf == 0:
+            self.logger.bind(tag=TAG).warning(
+                f"上报线程未启动: chat_history_conf=0 (0=不记录, 1=仅文本, 2=文本+语音)"
+            )
             return
         if self.report_thread is None or not self.report_thread.is_alive():
             self.report_thread = threading.Thread(
@@ -663,8 +678,10 @@ class ConnectionHandler:
 
     def _initialize_memory(self):
         if self.memory is None:
+            self.logger.bind(tag=TAG).info("记忆模块未配置，跳过初始化")
             return
         """初始化记忆模块"""
+        self.logger.bind(tag=TAG).info("开始初始化记忆模块")
         self.memory.init_memory(
             role_id=self.device_id,
             llm=self.llm,

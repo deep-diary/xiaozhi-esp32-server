@@ -77,6 +77,9 @@ async def get_config_from_api_async(config):
             "vision_explain": config["server"].get("vision_explain", ""),
             "auth_key": config["server"].get("auth_key", ""),
         }
+    # Immich的配置以本地为准（因为Immich配置通常不会从manager-api获取）
+    if config.get("Immich"):
+        config_data["Immich"] = config.get("Immich")
     # 如果服务器没有prompt_template，则从本地配置读取
     if not config_data.get("prompt_template"):
         config_data["prompt_template"] = config.get("prompt_template")
