@@ -783,6 +783,10 @@ class ConnectionHandler:
             self.llm_finish_task = False
             self.sentence_id = str(uuid.uuid4().hex)
             self.dialogue.put(Message(role="user", content=query))
+
+            # 注意：STT消息的广播已在send_stt_message中处理，这里不再重复广播
+            # 避免用户消息被发送两次
+
             self.tts.tts_text_queue.put(
                 TTSMessageDTO(
                     sentence_id=self.sentence_id,
@@ -887,6 +891,19 @@ class ConnectionHandler:
             if content is not None and len(content) > 0:
                 if not tool_call_flag:
                     response_message.append(content)
+
+                    # 广播 LLM 回复到 Gradio 客户端
+                    if hasattr(self.server, 'broadcast_to_gradio'):
+                        # 在同步方法中调用异步方法，使用 run_coroutine_threadsafe
+                        asyncio.run_coroutine_threadsafe(
+                            self.server.broadcast_to_gradio({
+                                "type": "llm",
+                                "text": content,
+                                "session_id": self.session_id
+                            }),
+                            self.loop
+                        )
+
                     self.tts.tts_text_queue.put(
                         TTSMessageDTO(
                             sentence_id=self.sentence_id,
@@ -995,8 +1012,36 @@ class ConnectionHandler:
                 Action.ERROR,
             ]:  # 直接回复前端
                 text = result.response if result.response else result.result
+                
+                # 如果文本是 JSON 字符串，尝试解析提取实际内容
+                if text and isinstance(text, str):
+                    try:
+                        # 检查是否是 JSON 格式的字符串
+                        if text.strip().startswith("{") and text.strip().endswith("}"):
+                            parsed = json.loads(text)
+                            # 如果是字典且包含 response 字段，提取实际文本
+                            if isinstance(parsed, dict) and "response" in parsed:
+                                text = parsed["response"]
+                            # 如果是字典且包含 content 字段，提取实际文本
+                            elif isinstance(parsed, dict) and "content" in parsed:
+                                text = parsed["content"]
+                    except (json.JSONDecodeError, TypeError):
+                        # 不是 JSON 或解析失败，使用原文本
+                        pass
+                
                 self.tts.tts_one_sentence(self, ContentType.TEXT, content_detail=text)
                 self.dialogue.put(Message(role="assistant", content=text))
+                
+                # 广播工具调用结果到 Gradio 客户端
+                if hasattr(self.server, 'broadcast_to_gradio') and text:
+                    asyncio.run_coroutine_threadsafe(
+                        self.server.broadcast_to_gradio({
+                            "type": "llm",
+                            "text": text,
+                            "session_id": self.session_id
+                        }),
+                        self.loop
+                    )
             elif result.action == Action.REQLLM:
                 # 收集需要 LLM 处理的工具
                 need_llm_tools.append((result, tool_call_data))

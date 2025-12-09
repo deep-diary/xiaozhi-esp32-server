@@ -8,11 +8,12 @@ TAG = __name__
 
 
 class SimpleHttpServer:
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, ws_server=None):
         self.config = config
         self.logger = setup_logging()
+        self.ws_server = ws_server  # 保存 WebSocket 服务器引用
         self.ota_handler = OTAHandler(config)
-        self.vision_handler = VisionHandler(config)
+        self.vision_handler = VisionHandler(config, ws_server=ws_server)  # 传递 server 引用
 
     def _get_websocket_url(self, local_ip: str, port: int) -> str:
         """获取websocket地址

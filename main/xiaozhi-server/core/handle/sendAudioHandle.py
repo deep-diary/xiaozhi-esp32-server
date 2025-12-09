@@ -17,6 +17,18 @@ async def sendAudioMessage(conn, sentenceType, audios, text):
 
     if sentenceType == SentenceType.FIRST:
         await send_tts_message(conn, "sentence_start", text)
+        
+        # 广播每个句子到 Gradio 客户端（作为独立消息显示）
+        if text and hasattr(conn, 'server') and conn.server and hasattr(conn.server, 'broadcast_to_gradio'):
+            try:
+                await conn.server.broadcast_to_gradio({
+                    "type": "llm_sentence",  # 使用新类型，表示这是一个完整的句子
+                    "text": text,
+                    "session_id": conn.session_id
+                })
+                conn.logger.bind(tag=TAG).debug(f"已广播句子到 Gradio: {text[:50]}...")
+            except Exception as e:
+                conn.logger.bind(tag=TAG).error(f"广播句子到 Gradio 失败: {e}")
 
     await sendAudio(conn, audios)
     # 发送句子开始消息
@@ -252,7 +264,25 @@ async def send_stt_message(conn, text):
         # 如果不是JSON格式，直接使用原始文本
         display_text = text
     stt_text = textUtils.get_string_no_punctuation_or_emoji(display_text)
-    await conn.websocket.send(
-        json.dumps({"type": "stt", "text": stt_text, "session_id": conn.session_id})
-    )
+    stt_message = {"type": "stt", "text": stt_text, "session_id": conn.session_id}
+    
+    # 如果包含说话人信息，添加到消息中
+    if hasattr(conn, 'current_speaker') and conn.current_speaker:
+        stt_message["speaker"] = conn.current_speaker
+    
+    await conn.websocket.send(json.dumps(stt_message))
+    
+    # 检查是否是系统提示词，如果是则不广播到Gradio客户端
+    is_system_prompt = False
+    end_prompt_str = conn.config.get("end_prompt", {}).get("prompt")
+    if end_prompt_str and end_prompt_str == text:
+        is_system_prompt = True
+    # 检查是否是默认的系统提示词
+    if "时间过得真快" in text and "结束这场对话" in text:
+        is_system_prompt = True
+    
+    # 广播到 Gradio 客户端（系统提示词除外）
+    if not is_system_prompt and hasattr(conn, 'server') and conn.server and hasattr(conn.server, 'broadcast_to_gradio'):
+        await conn.server.broadcast_to_gradio(stt_message)
+    
     await send_tts_message(conn, "start")

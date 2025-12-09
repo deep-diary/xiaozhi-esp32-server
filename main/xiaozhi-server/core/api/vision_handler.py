@@ -18,9 +18,10 @@ MAX_FILE_SIZE = 5 * 1024 * 1024
 
 
 class VisionHandler:
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, ws_server=None):
         self.config = config
         self.logger = setup_logging()
+        self.server = ws_server  # 保存 WebSocket 服务器引用
         # 初始化认证工具
         self.auth = AuthToken(config["server"]["auth_key"])
         # 初始化Immich客户端
@@ -182,6 +183,64 @@ class VisionHandler:
                     people_str = "、".join(people_names)
                     result = f"{result}\n\n[识别到的人物：{people_str}]"
                     self.logger.bind(tag=TAG).info(f"VLLM回答中未提及人物，已补充人物信息: {people_names}")
+
+            # 广播视觉识别结果到 Gradio 客户端
+            if hasattr(self, 'server') and self.server and hasattr(self.server, 'broadcast_to_gradio'):
+                try:
+                    vision_message = {
+                        "type": "vision",
+                        "result": result,
+                        "people": people_names,
+                        "session_id": device_id,  # 使用设备ID作为session_id
+                    }
+                    
+                    # 优先使用 Immich asset_id 构建图片 URL
+                    if people_info and people_info.get("success") and people_info.get("asset_id"):
+                        asset_id = people_info.get("asset_id")
+                        vision_message["asset_id"] = asset_id
+                        
+                        # 从 Immich API URL 提取基础 URL（例如：http://127.0.0.1:2283/api -> http://127.0.0.1:2283）
+                        if self.immich_client and self.immich_client.api_url:
+                            # 移除 /api 后缀，获取基础 URL
+                            base_url = self.immich_client.api_url.replace("/api", "").rstrip("/")
+                            # 构建 Immich 图片 URL
+                            immich_image_url = f"{base_url}/photos/{asset_id}"
+                            vision_message["image_url"] = immich_image_url
+                            self.logger.bind(tag=TAG).info(f"使用 Immich asset_id 构建图片 URL: {immich_image_url}")
+                        else:
+                            # 如果没有 Immich URL，使用 base64（降级方案）
+                            image_format = "jpeg"
+                            if image_data.startswith(b'\x89PNG'):
+                                image_format = "png"
+                            elif image_data.startswith(b'GIF'):
+                                image_format = "gif"
+                            elif image_data.startswith(b'BM'):
+                                image_format = "bmp"
+                            image_data_uri = f"data:image/{image_format};base64,{image_base64}"
+                            vision_message["image"] = image_data_uri
+                            self.logger.bind(tag=TAG).warning("Immich URL 未配置，使用 base64 图片（降级方案）")
+                    else:
+                        # 如果没有 asset_id，使用 base64（降级方案）
+                        image_format = "jpeg"
+                        if image_data.startswith(b'\x89PNG'):
+                            image_format = "png"
+                        elif image_data.startswith(b'GIF'):
+                            image_format = "gif"
+                        elif image_data.startswith(b'BM'):
+                            image_format = "bmp"
+                        image_data_uri = f"data:image/{image_format};base64,{image_base64}"
+                        vision_message["image"] = image_data_uri
+                        self.logger.bind(tag=TAG).info("未获取到 Immich asset_id，使用 base64 图片（降级方案）")
+                    
+                    self.logger.bind(tag=TAG).info(f"准备广播视觉识别结果到Gradio客户端: device_id={device_id}, people={people_names}")
+                    await self.server.broadcast_to_gradio(vision_message)
+                    self.logger.bind(tag=TAG).info(f"视觉识别结果已广播到Gradio客户端")
+                except Exception as e:
+                    self.logger.bind(tag=TAG).error(f"广播视觉识别结果失败: {e}")
+                    import traceback
+                    self.logger.bind(tag=TAG).error(f"错误堆栈: {traceback.format_exc()}")
+            else:
+                self.logger.bind(tag=TAG).warning(f"无法广播视觉识别结果: server={hasattr(self, 'server')}, server对象={self.server if hasattr(self, 'server') else None}, broadcast方法={hasattr(self.server, 'broadcast_to_gradio') if hasattr(self, 'server') and self.server else False}")
 
             # 构建返回结果，保持原有协议不变
             return_json = {
