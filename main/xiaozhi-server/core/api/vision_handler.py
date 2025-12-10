@@ -119,6 +119,7 @@ class VisionHandler:
 
             # 如果识别到人物，将人物信息整合到question中，让VLLM在回答中包含人物信息
             people_names = []
+            people_ids = []
             if people_info and people_info.get("success") and people_info.get("people"):
                 people_list = people_info.get("people", [])
                 # 只提取有效的人物名称（排除"未命名"和空值）
@@ -126,6 +127,10 @@ class VisionHandler:
                     p.get("person_name") 
                     for p in people_list 
                     if p.get("person_name") and p.get("person_name") != "未命名"
+                ]
+                people_ids = [
+                    p.get("person_id")
+                    for p in people_list
                 ]
                 if people_names:
                     # 优化question构建，更明确地要求VLLM提及人物
@@ -191,6 +196,7 @@ class VisionHandler:
                         "type": "vision",
                         "result": result,
                         "people": people_names,
+                        "people_ids": people_ids,
                         "session_id": device_id,  # 使用设备ID作为session_id
                     }
                     

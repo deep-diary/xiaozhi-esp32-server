@@ -371,7 +371,7 @@ class ImmichClient:
             }
         
         # 2. 等待处理完成（已检测到人脸，正常等待）
-        processing_complete = await self.wait_for_processing(asset_id, max_retries=5, wait_seconds=1)
+        processing_complete = await self.wait_for_processing(asset_id, max_retries=5, wait_seconds=0.5)
         
         if not processing_complete:
             logger.bind(tag=TAG).info(
