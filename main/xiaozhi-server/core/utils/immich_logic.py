@@ -41,54 +41,161 @@ class ImmichLogic:
         if not self.api.enabled:
             logger.bind(tag=TAG).warning("Immich API未启用，业务逻辑功能将被禁用")
     
-    async def search_person_by_name(
+    async def search_random_by_person(
         self,
         person_name: str,
-        timeout: float = 5.0
-    ) -> Optional[List[str]]:
+        size: int = 10,
+        **kwargs
+    ) -> Optional[List[Dict]]:
         """
-        通过人物名称搜索人物ID列表
+        根据人物姓名和数量进行随机搜索，返回资产列表
         
-        业务场景：用户提供人物名称，需要先搜索获取人物ID，然后用于资产搜索
+        业务场景：用户提供人物名称，随机获取该人物的一些照片，用于前端展示
         
         Args:
             person_name: 人物名称
-            timeout: 搜索超时时间（秒），默认5秒
+            size: 返回的资产数量，默认10
+            **kwargs: 其他搜索参数（传递给 search_random）
         
         Returns:
-            人物ID列表，如果搜索失败或未找到返回None
+            资产列表（字典格式），如果搜索失败返回None
         """
+        if not self.api.enabled:
+            logger.bind(tag=TAG).warning("Immich API未启用，无法执行随机搜索")
+            return None
+        
         try:
-            logger.bind(tag=TAG).info(f"[immich_logic] 通过人物名称搜索人物ID: person_name='{person_name}'")
-            # 直接调用API层，API层已经做了enabled和name的检查
-            # 添加超时保护
-            persons = await asyncio.wait_for(
-                self.api.search_person(name=person_name),
-                timeout=timeout
-            )
+            # 先搜索人物ID
+            person_ids = await self.api.search_person(name=person_name, return_ids=True, timeout=5.0)
             
-            if persons and len(persons) > 0:
-                # 提取人物ID列表（业务逻辑：从完整人物信息中提取ID）
-                person_ids = [person.get('id') for person in persons if person.get('id')]
-                if person_ids:
-                    person_names = [p.get('name', 'N/A') for p in persons]
-                    logger.bind(tag=TAG).info(
-                        f"[immich_logic] 找到人物ID: {person_ids}, 人物名称: {person_names}"
-                    )
-                    return person_ids
-                else:
-                    logger.bind(tag=TAG).warning(f"[immich_logic] 未找到有效的人物ID")
-                    return None
-            else:
+            if not person_ids:
                 logger.bind(tag=TAG).warning(f"[immich_logic] 未找到名为 '{person_name}' 的人物")
                 return None
+            
+            logger.bind(tag=TAG).info(f"[immich_logic] 找到人物ID: {person_ids}，开始随机搜索资产")
+            
+            # 使用人物ID进行随机搜索
+            search_kwargs = {
+                "person_ids": person_ids,
+                "size": size,
+                **kwargs
+            }
+            
+            assets = await self.api.search_random(**search_kwargs)
+            
+            # 确保返回的是列表类型
+            if assets is not None:
+                if not isinstance(assets, list):
+                    logger.bind(tag=TAG).error(f"[immich_logic] search_random 返回了非列表类型: {type(assets)}, 值: {assets}")
+                    return None
+                if len(assets) > 0:
+                    logger.bind(tag=TAG).info(f"[immich_logic] 随机搜索完成: 找到 {len(assets)} 个资产")
+                    return assets
+                else:
+                    logger.bind(tag=TAG).warning(f"[immich_logic] 随机搜索未找到资产")
+                    return None
+            else:
+                logger.bind(tag=TAG).warning(f"[immich_logic] 随机搜索返回 None")
+                return None
                 
-        except asyncio.TimeoutError:
-            logger.bind(tag=TAG).warning(f"[immich_logic] 搜索人物ID超时（{timeout}秒）")
-            return None
         except Exception as e:
-            # API层的异常会被传播到这里，这里只处理超时异常
-            logger.bind(tag=TAG).error(f"[immich_logic] 搜索人物ID异常: {e}", exc_info=True)
+            logger.bind(tag=TAG).error(f"[immich_logic] 随机搜索异常: {e}", exc_info=True)
+            return None
+    
+    async def search_smart_assets(
+        self,
+        query: str = "",
+        person_name: Optional[str] = None,
+        city: Optional[str] = None,
+        date: Optional[tuple] = None,
+        size: Optional[int] = None,
+        **kwargs
+    ) -> Optional[List[Dict]]:
+        """
+        根据时间、地点、人物、描述、数量进行智能检索，返回资产列表
+        
+        业务场景：根据多个条件智能搜索资产，返回资产列表供前端展示
+        
+        Args:
+            query: 搜索查询字符串（描述）
+            person_name: 人物名称（可选）
+            city: 城市名称（可选）
+            date: 日期范围元组 (taken_after, taken_before)，可选
+            size: 每页数量，默认None（使用服务器默认值）
+            **kwargs: 其他搜索参数（传递给 search_smart）
+        
+        Returns:
+            资产列表（字典格式），如果搜索失败返回None
+        """
+        if not self.api.enabled:
+            logger.bind(tag=TAG).warning("Immich API未启用，无法执行智能搜索")
+            return None
+        
+        try:
+            # 准备搜索参数
+            search_kwargs = {}
+            
+            # 处理人物名称
+            if person_name:
+                person_ids = await self.api.search_person(name=person_name, return_ids=True, timeout=5.0)
+                if person_ids:
+                    search_kwargs["person_ids"] = person_ids
+                    logger.bind(tag=TAG).info(f"[immich_logic] 使用人物ID进行搜索: {person_ids}")
+                else:
+                    # 如果未找到人物ID，将人物名称添加到查询字符串中
+                    if query:
+                        query = f"{query} {person_name}"
+                    else:
+                        query = person_name
+            
+            # 处理城市
+            if city:
+                search_kwargs["city"] = city
+            
+            # 处理日期范围
+            if date:
+                taken_after, taken_before = date
+                if taken_after:
+                    search_kwargs["taken_after"] = taken_after
+                if taken_before:
+                    search_kwargs["taken_before"] = taken_before
+            
+            # 如果没有查询字符串，使用默认值
+            if not query:
+                query = "photo"
+            
+            # 添加其他参数
+            search_kwargs.update(kwargs)
+            
+            logger.bind(tag=TAG).info(
+                f"[immich_logic] 开始智能搜索: query='{query}', "
+                f"size={size}, search_kwargs={search_kwargs}"
+            )
+            
+            # 执行智能搜索
+            search_result = await self.api.search_smart(query=query, size=size, **search_kwargs)
+            
+            if not search_result:
+                logger.bind(tag=TAG).warning("[immich_logic] 智能搜索未返回结果")
+                return None
+            
+            # 提取资产列表
+            assets_data = search_result.get('assets', {})
+            assets_items = assets_data.get('items', [])
+            
+            # 确保返回的是列表类型
+            if assets_items:
+                if not isinstance(assets_items, list):
+                    logger.bind(tag=TAG).error(f"[immich_logic] search_smart 返回的 items 不是列表类型: {type(assets_items)}, 值: {assets_items}")
+                    return None
+                logger.bind(tag=TAG).info(f"[immich_logic] 智能搜索完成: 找到 {len(assets_items)} 个资产")
+                return assets_items
+            else:
+                logger.bind(tag=TAG).warning("[immich_logic] 智能搜索未找到资产")
+                return None
+                
+        except Exception as e:
+            logger.bind(tag=TAG).error(f"[immich_logic] 智能搜索异常: {e}", exc_info=True)
             return None
     
     async def search_and_download_thumbnails(
@@ -149,7 +256,8 @@ class ImmichLogic:
         try:
             # 步骤0: 如果提供了人物名称，先搜索人物ID
             if person_name:
-                person_ids = await self.search_person_by_name(person_name)
+                # 调用API层的方法获取人物ID
+                person_ids = await self.api.search_person(name=person_name, return_ids=True, timeout=5.0)
                 if person_ids:
                     # 将人物ID添加到搜索参数中
                     search_kwargs["person_ids"] = person_ids

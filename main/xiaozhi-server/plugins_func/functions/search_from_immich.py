@@ -27,9 +27,9 @@ SEARCH_FROM_IMMICH_FUNCTION_DESC = {
     "function": {
         "name": "search_from_immich",
         "description": (
-            "从 Immich 相册中搜索图片并下载缩略图。"
-            "可以根据人名、城市、日期、文字描述等条件搜索照片。"
-            "搜索完成后会将缩略图下载到本地，用于web显示。"
+            "从 Immich 相册中搜索图片。"
+            "根据用户的需求，提取搜索条件（人物、地点、日期、内容描述）来搜索照片。"
+            "重要：只有当用户明确提到某个条件时，才填写对应的参数；如果用户没有提到，则不要填写该参数。"
         ),
         "parameters": {
             "type": "object",
@@ -37,29 +37,50 @@ SEARCH_FROM_IMMICH_FUNCTION_DESC = {
                 "person_name": {
                     "type": "string",
                     "description": (
-                        "要搜索的人物名称（人名），例如：Json、张三、John、Mary等。"
-                        "当用户提到人名时，必须提取并传入此参数。可选参数，如果不提供则不传"
+                        "要搜索的人物名称（人名）。"
+                        "重要：只有当用户明确提到人名时才填写此参数，例如用户说'Jason的照片'、'找Alex的照片'等。"
+                        "如果用户没有提到人名，则不要填写此参数（不传或传空）。"
+                        "示例：'Jason'、'Alex'、'张三'、'Mary'等。"
                     ),
                 },
                 "city": {
                     "type": "string",
-                    "description": "要搜索的城市名称（英文），例如：Beijing、Shanghai、New York等。可选参数，如果不提供则不传",
+                    "description": (
+                        "要搜索的城市名称（英文）。"
+                        "重要：只有当用户明确提到城市名称时才填写此参数，例如用户说'在北京拍的照片'、'上海的照片'等。"
+                        "如果用户没有提到城市，则不要填写此参数（不传或传空）。"
+                        "示例：'Beijing'、'Shanghai'、'New York'、'Tokyo'等。"
+                    ),
                 },
                 "date": {
                     "type": "string",
-                    "description": "要搜索的日期，格式：YYYY-MM-DD 或 YYYY-MM-DD 到 YYYY-MM-DD（日期范围）。可选参数，如果不提供则不传",
+                    "description": (
+                        "要搜索的日期。"
+                        "重要：只有当用户明确提到日期时才填写此参数，例如用户说'2024年的照片'、'去年拍的照片'、'1月1日的照片'等。"
+                        "如果用户没有提到日期，则不要填写此参数（不传或传空）。"
+                        "格式：YYYY-MM-DD 或 YYYY-MM-DD 到 YYYY-MM-DD（日期范围）。"
+                        "示例：'2024-01-01'、'2024-01-01 到 2024-12-31'等。"
+                    ),
                 },
                 "description": {
                     "type": "string",
                     "description": (
-                        "英文文字描述，用于智能搜索照片。"
-                        "必须将用户的中文描述翻译成英文后传入，例如：'骑自行车'翻译为'travel by bike'，'在海边'翻译为'beach'，'生日聚会'翻译为'birthday party'等。"
-                        "可选参数，如果不提供则不传"
+                        "照片内容的英文文字描述，用于智能搜索。"
+                        "重要：必须将用户的中文描述准确翻译成英文关键词。"
+                        "如果用户说'我想看雪山的照片'，应该翻译为'snow mountain'或'snowy mountain'；"
+                        "如果用户说'骑自行车的照片'，应该翻译为'bicycle'或'cycling'或'bike'；"
+                        "如果用户说'海边的照片'，应该翻译为'beach'或'seaside'；"
+                        "如果用户说'生日聚会的照片'，应该翻译为'birthday party'；"
+                        "如果用户说'宠物的照片'，应该翻译为'pet'或'dog'或'cat'等。"
+                        "如果用户没有提到具体的内容描述，则不要填写此参数（不传或传空）。"
                     ),
                 },
                 "max_count": {
                     "type": "integer",
-                    "description": "最大返回数量，默认5。可选参数",
+                    "description": (
+                        "最大返回数量，默认5。"
+                        "如果用户明确提到数量（如'给我看10张照片'），则填写对应数字；否则使用默认值5。"
+                    ),
                 },
             },
             "required": [],
@@ -82,13 +103,15 @@ def _parse_date_range(date_str: str) -> tuple[Optional[datetime], Optional[datet
         return None, None
     
     try:
-        # 检查是否是日期范围
-        if "到" in date_str or "-" in date_str and len(date_str.split()) > 1:
+        date_str = date_str.strip()
+        
+        # 检查是否是日期范围（包含"到"关键字）
+        if "到" in date_str:
             # 处理日期范围，例如："2024-01-01 到 2024-12-31"
-            parts = date_str.replace("到", "-").split("-")
-            if len(parts) >= 2:
+            parts = date_str.split("到", 1)  # 只分割一次，避免日期中的"-"干扰
+            if len(parts) == 2:
                 start_str = parts[0].strip()
-                end_str = parts[-1].strip()
+                end_str = parts[1].strip()
                 
                 # 尝试解析日期
                 try:
@@ -96,17 +119,24 @@ def _parse_date_range(date_str: str) -> tuple[Optional[datetime], Optional[datet
                     end_date = datetime.strptime(end_str, "%Y-%m-%d")
                     # 结束日期设置为当天的23:59:59
                     end_date = end_date.replace(hour=23, minute=59, second=59)
+                    logger.bind(tag=TAG).info(f"成功解析日期范围: {start_date} 到 {end_date}")
                     return start_date, end_date
-                except ValueError:
-                    pass
+                except ValueError as e:
+                    logger.bind(tag=TAG).warning(f"日期范围解析失败: {date_str}, 错误: {e}")
+                    return None, None
         
         # 单个日期
-        date = datetime.strptime(date_str.strip(), "%Y-%m-%d")
-        end_date = date.replace(hour=23, minute=59, second=59)
-        return date, end_date
+        try:
+            date = datetime.strptime(date_str, "%Y-%m-%d")
+            end_date = date.replace(hour=23, minute=59, second=59)
+            logger.bind(tag=TAG).info(f"成功解析单个日期: {date} 到 {end_date}")
+            return date, end_date
+        except ValueError as e:
+            logger.bind(tag=TAG).warning(f"日期格式解析失败: {date_str}, 错误: {e}")
+            return None, None
     
-    except ValueError:
-        logger.bind(tag=TAG).warning(f"日期格式解析失败: {date_str}")
+    except Exception as e:
+        logger.bind(tag=TAG).warning(f"日期解析异常: {date_str}, 错误: {e}")
         return None, None
 
 
@@ -154,13 +184,6 @@ def search_from_immich(
                 Action.RESPONSE, None, "Immich 相册服务配置不完整，无法搜索图片"
             )
         
-        # 获取保存目录配置
-        save_dir_config = conn.config.get("plugins", {}).get("search_from_immich", {}).get(
-            "save_dir", "tmp/immich_thumbnails"
-        )
-        save_dir = Path(save_dir_config)
-        save_dir.mkdir(parents=True, exist_ok=True)
-        
         # 初始化 Immich API 和业务逻辑层
         immich_api = ImmichAPI(immich_config)
         if not immich_api.enabled:
@@ -183,55 +206,30 @@ def search_from_immich(
                 )
             query_parts.append(description)
         
-        # 如果没有提供任何搜索条件，返回提示
-        if not query_parts and not person_name and not city and not date:
-            return ActionResponse(
-                Action.RESPONSE,
-                None,
-                "请提供至少一个搜索条件（人物名称、城市、日期或文字描述）",
-            )
-        
         # 组合查询字符串
         query = " ".join(query_parts) if query_parts else ""
         
-        # 准备搜索参数
-        search_kwargs = {}
-        
-        # 处理城市
-        if city:
-            search_kwargs["city"] = city
-        
         # 处理日期范围
+        date_range = None
         if date:
             taken_after, taken_before = _parse_date_range(date)
-            if taken_after:
-                search_kwargs["taken_after"] = taken_after
-            if taken_before:
-                search_kwargs["taken_before"] = taken_before
-        
-        # 注意：人物名称的处理已经移到 immich_logic.search_and_download_thumbnails 中
-        # 这里只需要传递 person_name 参数即可
-        
-        # 设置可见性为可见的资产
-        search_kwargs["visibility"] = AssetVisibility.TIMELINE
+            if taken_after or taken_before:
+                date_range = (taken_after, taken_before)
+                logger.bind(tag=TAG).info(f"日期范围解析成功: {taken_after} 到 {taken_before}")
+            else:
+                logger.bind(tag=TAG).warning(f"日期范围解析失败，将不使用日期过滤: {date}")
         
         # 设置最大数量
-        max_download_count = max_count or 5
-        
-        # 如果没有查询字符串，使用默认值
-        if not query:
-            query = "photo"
+        max_count_value = max_count or 5
         
         logger.bind(tag=TAG).info(
             f"准备搜索 Immich 图片: query='{query}', "
-            f"person_name={person_name}, city={city}, date={date}, max_count={max_download_count}, "
-            f"search_kwargs={search_kwargs}"
+            f"person_name={person_name}, city={city}, date={date}, max_count={max_count_value}"
         )
         
         # 在新线程中运行事件循环，避免与当前线程的事件循环冲突
-        # 直接调用 immich_logic.search_and_download_thumbnails，不需要额外的包装函数
         try:
-            timeout_seconds = 10  # 10秒超时
+            timeout_seconds = 30  # 30秒超时
             
             # 用于存储结果的变量
             result_container = {"result": None, "exception": None}
@@ -246,23 +244,49 @@ def search_from_immich(
                     asyncio.set_event_loop(new_loop)
                     
                     try:
-                        # 直接调用异步函数，带超时保护
-                        # person_name 参数会由 immich_logic 内部处理（搜索人物ID）
-                        result = new_loop.run_until_complete(
-                            asyncio.wait_for(
-                                immich_logic.search_and_download_thumbnails(
-                                    query=query,
-                                    save_dir=save_dir,
-                                    thumbnail_size=AssetMediaSize.THUMBNAIL,
-                                    max_count=max_download_count,
-                                    person_name=person_name,  # 传递人物名称，由业务逻辑层处理
-                                    **search_kwargs
-                                ),
-                                timeout=timeout_seconds
+                        # 根据是否有query参数决定调用智能搜索还是随机搜索
+                        if query:
+                            # 有query参数，调用智能搜索
+                            logger.bind(tag=TAG).info("使用智能搜索")
+                            assets = new_loop.run_until_complete(
+                                asyncio.wait_for(
+                                    immich_logic.search_smart_assets(
+                                        query=query,
+                                        person_name=person_name,
+                                        city=city,
+                                        date=date_range,
+                                        size=max_count_value,
+                                        visibility=AssetVisibility.TIMELINE
+                                    ),
+                                    timeout=timeout_seconds
+                                )
                             )
-                        )
-                        result_container["result"] = result
-                        logger.bind(tag=TAG).info(f"搜索完成，获得结果: success={result.get('success') if result else None}")
+                        elif person_name:
+                            # query为空但人物信息不为空，调用随机检索
+                            logger.bind(tag=TAG).info(f"使用随机搜索，人物: {person_name}")
+                            assets = new_loop.run_until_complete(
+                                asyncio.wait_for(
+                                    immich_logic.search_random_by_person(
+                                        person_name=person_name,
+                                        size=max_count_value,
+                                        visibility=AssetVisibility.TIMELINE
+                                    ),
+                                    timeout=timeout_seconds
+                                )
+                            )
+                        else:
+                            # 既没有query也没有person_name，返回错误
+                            result_container["exception"] = ValueError("请提供至少一个搜索条件（人物名称或文字描述）")
+                            return
+                        
+                        # 确保 assets 是列表类型
+                        if assets is not None and not isinstance(assets, list):
+                            logger.bind(tag=TAG).error(f"搜索返回了非列表类型: {type(assets)}, 值: {assets}")
+                            result_container["exception"] = TypeError(f"搜索返回了非列表类型: {type(assets)}")
+                            return
+                        
+                        result_container["result"] = assets
+                        logger.bind(tag=TAG).info(f"搜索完成，找到 {len(assets) if assets else 0} 个资产")
                     except asyncio.TimeoutError:
                         logger.bind(tag=TAG).error(f"搜索超时（{timeout_seconds}秒）")
                         result_container["exception"] = TimeoutError(f"搜索超时（{timeout_seconds}秒）")
@@ -297,8 +321,90 @@ def search_from_immich(
                     else:
                         raise result_container["exception"]
                 
-                result = result_container["result"]
-                logger.bind(tag=TAG).info(f"搜索任务完成: success={result.get('success') if result else None}")
+                assets = result_container["result"]
+                
+                # 确保 assets 是列表类型
+                if assets is not None and not isinstance(assets, list):
+                    logger.bind(tag=TAG).error(f"搜索结果不是列表类型: {type(assets)}, 值: {assets}")
+                    return ActionResponse(
+                        Action.RESPONSE,
+                        None,
+                        f"搜索返回了错误的数据类型: {type(assets).__name__}"
+                    )
+                
+                # 统计实际找到的资产数量（这是真实的搜索结果，不是请求数量）
+                actual_count = len(assets) if assets else 0
+                logger.bind(tag=TAG).info(
+                    f"搜索任务完成: 实际找到 {actual_count} 个资产 "
+                    f"(请求数量: {max_count_value}, 这是真实的搜索结果)"
+                )
+                
+                if not assets:
+                    return ActionResponse(
+                        Action.RESPONSE,
+                        None,
+                        "未找到相关照片，请尝试其他搜索条件"
+                    )
+                
+                # 通过socket接口发送资产列表给web端
+                if hasattr(conn, 'server') and conn.server and hasattr(conn.server, 'broadcast_to_gradio'):
+                    try:
+                        import json
+                        message = {
+                            "type": "immich_search_result",
+                            "data": {
+                                "assets": assets,
+                                "count": len(assets),
+                                "query": query,
+                                "person_name": person_name,
+                                "city": city,
+                                "date": date
+                            }
+                        }
+                        # 在新线程的事件循环中发送消息
+                        def send_message():
+                            send_loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(send_loop)
+                            try:
+                                send_loop.run_until_complete(conn.server.broadcast_to_gradio(message))
+                                logger.bind(tag=TAG).info(f"已通过socket发送 {len(assets)} 个资产到web端")
+                            except Exception as e:
+                                logger.bind(tag=TAG).error(f"发送资产列表到web端失败: {e}", exc_info=True)
+                            finally:
+                                send_loop.close()
+                        
+                        send_thread = threading.Thread(target=send_message, daemon=True)
+                        send_thread.start()
+                    except Exception as e:
+                        logger.bind(tag=TAG).error(f"创建发送线程失败: {e}", exc_info=True)
+                else:
+                    logger.bind(tag=TAG).warning("无法发送资产列表到web端: server或broadcast_to_gradio方法不存在")
+                
+                # 构建简洁的回复消息，只包含查询结果汇总信息，供LLM生成语音回复
+                search_conditions = []
+                if person_name:
+                    search_conditions.append(f"人物：{person_name}")
+                if city:
+                    search_conditions.append(f"城市：{city}")
+                if date:
+                    search_conditions.append(f"日期：{date}")
+                if query and query != "photo":
+                    search_conditions.append(f"描述：{query}")
+                
+                conditions_text = "、".join(search_conditions) if search_conditions else "所有照片"
+                
+                # 统计实际找到的照片数量（这是真实的搜索结果，不是请求数量）
+                actual_count = len(assets) if assets else 0
+                
+                # 构建简洁的回复消息（只包含汇总信息，不列出每张照片的详细信息）
+                if actual_count > 0:
+                    response_message = f"搜索完成！根据条件（{conditions_text}）找到了 {actual_count} 张相关照片。所有照片已发送到前端展示，您可以在界面上查看。"
+                else:
+                    response_message = f"搜索完成！根据条件（{conditions_text}）未找到相关照片，请尝试其他搜索条件。"
+                
+                logger.bind(tag=TAG).info(f"构建回复消息: {response_message[:100]}...")
+                
+                return ActionResponse(Action.REQLLM, response_message, None)
             else:
                 logger.bind(tag=TAG).error(f"等待搜索任务超时（{timeout_seconds + 10}秒）")
                 return ActionResponse(
@@ -316,39 +422,6 @@ def search_from_immich(
                     "搜索超时，图片搜索可能需要较长时间，请稍后重试或减少搜索条件"
                 )
             raise
-        
-        # 处理结果
-        if result.get("success"):
-            total_found = result.get("total_found", 0)
-            downloaded = result.get("downloaded", 0)
-            failed = result.get("failed", 0)
-            saved_files = result.get("saved_files", [])
-            
-            # 构建回复消息
-            response_message = f"搜索完成！\n"
-            response_message += f"找到 {total_found} 张相关照片\n"
-            response_message += f"成功下载 {downloaded} 张缩略图\n"
-            
-            if failed > 0:
-                response_message += f"下载失败 {failed} 张\n"
-            
-            if saved_files:
-                response_message += f"\n缩略图已保存到: {save_dir}\n"
-                response_message += f"共 {len(saved_files)} 个文件"
-            
-            logger.bind(tag=TAG).info(
-                f"Immich 搜索完成: 找到 {total_found} 张, 下载 {downloaded} 张"
-            )
-            
-            return ActionResponse(Action.REQLLM, response_message, None)
-        else:
-            errors = result.get("errors", [])
-            error_msg = "搜索失败"
-            if errors:
-                error_msg += f": {errors[0]}"
-            
-            logger.bind(tag=TAG).error(f"Immich 搜索失败: {errors}")
-            return ActionResponse(Action.RESPONSE, None, error_msg)
     
     except Exception as e:
         logger.bind(tag=TAG).error(f"搜索 Immich 图片异常: {e}", exc_info=True)

@@ -19,6 +19,7 @@ from immich_python_sdk import Configuration, ApiClient
 from immich_python_sdk.exceptions import ApiException
 from immich_python_sdk.models.asset_response_dto import AssetResponseDto
 from immich_python_sdk.models.smart_search_dto import SmartSearchDto
+from immich_python_sdk.models.random_search_dto import RandomSearchDto
 from immich_python_sdk.models.asset_media_size import AssetMediaSize
 from immich_python_sdk.models.asset_media_response_dto import AssetMediaResponseDto
 from immich_python_sdk.models.asset_visibility import AssetVisibility
@@ -199,17 +200,23 @@ class ImmichAPI:
     async def search_person(
         self,
         name: str,
-        with_hidden: Optional[bool] = None
-    ) -> Optional[List[Dict]]:
+        with_hidden: Optional[bool] = None,
+        return_ids: bool = True,
+        timeout: Optional[float] = None
+    ) -> Union[Optional[List[Dict]], Optional[List[str]]]:
         """
         通过人物名称搜索人物
         
         Args:
             name: 人物名称
             with_hidden: 是否包含隐藏的人物，默认None
+            return_ids: 是否只返回人物ID列表，默认False（返回完整人物信息）
+            timeout: 搜索超时时间（秒），默认None（无超时）。当return_ids=True时建议设置超时
             
         Returns:
-            人物列表（字典格式），每个字典包含 id, name 等信息，如果搜索失败返回None
+            如果 return_ids=False: 人物列表（字典格式），每个字典包含 id, name 等信息
+            如果 return_ids=True: 人物ID列表（字符串列表）
+            如果搜索失败返回None
         """
         if not self.enabled:
             logger.bind(tag=TAG).warning("Immich API未启用，无法搜索人物")
@@ -221,28 +228,51 @@ class ImmichAPI:
         
         try:
             # 使用 SDK 的 search_person 方法
-            persons = await self._run_sync(
+            search_func = self._run_sync(
                 self.search_api.search_person,
                 name=name,
                 with_hidden=with_hidden
             )
             
+            # 如果设置了超时，添加超时保护
+            if timeout is not None:
+                search_func = asyncio.wait_for(search_func, timeout=timeout)
+            
+            persons = await search_func
+            
             if persons:
                 # 将 PersonResponseDto 对象列表转换为字典列表
                 result = [person.to_dict() for person in persons]
-                logger.bind(tag=TAG).info(f"成功搜索人物: name='{name}', 找到 {len(result)} 个人物")
-                return result
+                
+                if return_ids:
+                    # 提取人物ID列表
+                    person_ids = [person.get('id') for person in result if person.get('id')]
+                    if person_ids:
+                        person_names = [p.get('name', 'N/A') for p in result]
+                        logger.bind(tag=TAG).info(
+                            f"成功搜索人物ID: name='{name}', 找到 {len(person_ids)} 个人物ID: {person_ids}, 人物名称: {person_names}"
+                        )
+                        return person_ids
+                    else:
+                        logger.bind(tag=TAG).warning(f"未找到有效的人物ID: name='{name}'")
+                        return None
+                else:
+                    logger.bind(tag=TAG).info(f"成功搜索人物: name='{name}', 找到 {len(result)} 个人物")
+                    return result
             
             logger.bind(tag=TAG).warning(f"搜索人物返回空结果: name='{name}'")
             return None
             
+        except asyncio.TimeoutError:
+            logger.bind(tag=TAG).warning(f"搜索人物超时（{timeout}秒）: name='{name}'")
+            return None
         except ApiException as e:
             logger.bind(tag=TAG).error(
-                f"搜索人物失败 (API异常): HTTP {e.status}, {e.reason}"
+                f"搜索人物失败 (API异常): HTTP {e.status}, {e.reason}, name='{name}'"
             )
             return None
         except Exception as e:
-            logger.bind(tag=TAG).error(f"搜索人物异常: {e}", exc_info=True)
+            logger.bind(tag=TAG).error(f"搜索人物异常: {e}, name='{name}'", exc_info=True)
             return None
     
     async def search_smart(
@@ -345,6 +375,107 @@ class ImmichAPI:
             return None
         except Exception as e:
             logger.bind(tag=TAG).error(f"智能搜索异常: {e}", exc_info=True)
+            return None
+    
+    async def search_random(
+        self,
+        size: Optional[int] = None,
+        **kwargs
+    ) -> Optional[List[Dict]]:
+        """
+        随机搜索资产
+        
+        根据指定的筛选条件随机返回资产列表。与 search_smart 的区别：
+        - search_smart: 基于文本查询的智能搜索，返回分页结果
+        - search_random: 随机搜索，不基于文本查询，返回资产列表
+        
+        Args:
+            size: 返回的资产数量，1-1000，默认None（使用服务器默认值）
+            **kwargs: 可选搜索参数:
+                - city: 城市名称
+                - country: 国家名称
+                - state: 州/省名称
+                - person_ids: 人物ID列表
+                - tag_ids: 标签ID列表
+                - is_favorite: 是否收藏
+                - is_archived: 是否归档（注意：RandomSearchDto 中没有此字段，使用 is_offline 等）
+                - is_offline: 是否离线
+                - type: 资产类型 (IMAGE/VIDEO)
+                - make: 相机品牌
+                - model: 相机型号
+                - lens_model: 镜头型号
+                - library_id: 库ID
+                - device_id: 设备ID
+                - is_encoded: 是否已编码
+                - is_motion: 是否动态照片
+                - is_not_in_album: 是否不在相册中
+                - rating: 评分 (-1到5)
+                - visibility: 可见性
+                - with_deleted: 是否包含已删除
+                - with_exif: 是否包含EXIF信息
+                - with_people: 是否包含人物
+                - with_stacked: 是否包含堆叠资产
+                - created_after: 创建时间之后 (datetime)
+                - created_before: 创建时间之前 (datetime)
+                - taken_after: 拍摄时间之后 (datetime)
+                - taken_before: 拍摄时间之前 (datetime)
+                - updated_after: 更新时间之后 (datetime)
+                - updated_before: 更新时间之前 (datetime)
+                - trashed_after: 删除时间之后 (datetime)
+                - trashed_before: 删除时间之前 (datetime)
+        
+        Returns:
+            资产列表（字典格式），如果搜索失败返回None
+        """
+        if not self.enabled:
+            logger.bind(tag=TAG).warning("Immich API未启用，无法执行随机搜索")
+            return None
+        
+        try:
+            logger.bind(tag=TAG).info(
+                f"[immich_api] 构建随机搜索参数: size={size}, kwargs={kwargs}"
+            )
+            # 构建 RandomSearchDto 对象
+            random_search_dto = RandomSearchDto(
+                size=size,
+                **kwargs
+            )
+            
+            logger.bind(tag=TAG).info(f"[immich_api] 调用 SDK search_api.search_random 开始...")
+            api_start_time = time.time()
+            # 使用 SDK 的 search_random 方法
+            search_result = await self._run_sync(
+                self.search_api.search_random,
+                random_search_dto=random_search_dto
+            )
+            api_duration = time.time() - api_start_time
+            logger.bind(tag=TAG).info(f"[immich_api] SDK search_api.search_random 完成，耗时: {api_duration:.2f}秒")
+            
+            # search_random 返回 List[AssetResponseDto]，转换为字典列表
+            if search_result:
+                # 确保返回的是列表类型
+                if not isinstance(search_result, list):
+                    logger.bind(tag=TAG).error(
+                        f"search_random SDK 返回了非列表类型: {type(search_result)}, 值: {search_result}"
+                    )
+                    return None
+                
+                result = [asset.to_dict() for asset in search_result]
+                logger.bind(tag=TAG).info(
+                    f"随机搜索完成: 找到 {len(result)} 个资产"
+                )
+                return result
+            
+            logger.bind(tag=TAG).warning("随机搜索返回空结果")
+            return None
+            
+        except ApiException as e:
+            logger.bind(tag=TAG).error(
+                f"随机搜索失败 (API异常): HTTP {e.status}, {e.reason}"
+            )
+            return None
+        except Exception as e:
+            logger.bind(tag=TAG).error(f"随机搜索异常: {e}", exc_info=True)
             return None
     
     async def download_asset(

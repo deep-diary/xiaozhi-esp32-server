@@ -799,20 +799,15 @@ async def test_search_person(person_name: str):
         import traceback
         traceback.print_exc()
     
-    # 测试逻辑层的search_person_by_name方法
+    # 测试API层的search_person方法（返回ID列表）
     print("\n" + "=" * 80)
-    print("测试业务逻辑层: 根据人名获取person_id列表")
+    print("测试API层: 根据人名获取person_id列表")
     print("=" * 80)
     print()
     
-    # 创建业务逻辑处理器
-    print("\n步骤 5: 初始化业务逻辑处理器...")
-    immich_logic = ImmichLogic(immich_api)
-    print("✓ 业务逻辑处理器初始化成功")
-    
-    print(f"\n步骤 6: 通过业务逻辑层搜索人物ID (person_name: '{person_name}')...")
+    print(f"\n步骤 5: 通过API层搜索人物ID (person_name: '{person_name}')...")
     try:
-        person_ids = await immich_logic.search_person_by_name(person_name, timeout=5.0)
+        person_ids = await immich_api.search_person(name=person_name, return_ids=True, timeout=5.0)
         
         if person_ids:
             print("✓ 成功获取人物ID列表")
@@ -835,10 +830,121 @@ async def test_search_person(person_name: str):
     print("=" * 80)
 
 
+async def test_search_random(person_name: str = "Jason", size: int = 5):
+    """
+    测试随机搜索资产功能
+    
+    Args:
+        person_name: 人物名称，用于筛选该人物的照片
+        size: 返回的随机照片数量，默认5张
+    """
+    print("=" * 80)
+    print("Immich API 随机搜索测试")
+    print("=" * 80)
+    print()
+    
+    # 初始化 API 客户端
+    immich_api = await _init_immich_api()
+    if not immich_api:
+        return
+    
+    # 如果提供了人物名称，先搜索人物ID
+    person_ids = None
+    if person_name:
+        print(f"\n步骤 4: 搜索人物信息 (person_name: '{person_name}')...")
+        try:
+            persons = await immich_api.search_person(name=person_name)
+            if persons:
+                person_ids = [p.get('id') for p in persons if p.get('id')]
+                if person_ids:
+                    print(f"✓ 找到人物ID: {person_ids}")
+                else:
+                    print(f"⚠ 未找到人物ID，将不使用人物筛选")
+                    person_name = None
+            else:
+                print(f"⚠ 未找到人物，将不使用人物筛选")
+                person_name = None
+        except Exception as e:
+            print(f"⚠ 搜索人物时发生异常: {e}，将不使用人物筛选")
+            person_name = None
+    
+    # 准备随机搜索参数
+    print(f"\n步骤 5: 准备随机搜索参数...")
+    search_params = {
+        "size": size
+    }
+    
+    if person_ids:
+        search_params["person_ids"] = person_ids
+        print(f"搜索参数:")
+        print(f"  返回数量: {size}")
+        print(f"  人物ID: {person_ids}")
+    else:
+        print(f"搜索参数:")
+        print(f"  返回数量: {size}")
+        print(f"  人物筛选: 无（随机返回所有照片）")
+    
+    print("✓ 搜索参数准备完成")
+    
+    # 执行随机搜索
+    print(f"\n步骤 6: 执行随机搜索...")
+    try:
+        assets = await immich_api.search_random(**search_params)
+        
+        if assets:
+            print("✓ 随机搜索成功")
+            print("\n" + "=" * 80)
+            print("搜索结果详情:")
+            print("=" * 80)
+            
+            print(f"\n找到 {len(assets)} 张随机照片:")
+            for i, asset in enumerate(assets, 1):
+                asset_id = asset.get('id', 'N/A')
+                asset_name = asset.get('originalFileName', 'N/A')
+                asset_type = asset.get('type', 'N/A')
+                is_favorite = asset.get('isFavorite', False)
+                local_date_time = asset.get('localDateTime', 'N/A')
+                
+                print(f"\n  {i}. [{asset_type}] {asset_name}")
+                print(f"     ID: {asset_id}")
+                print(f"     拍摄时间: {local_date_time}")
+                print(f"     是否收藏: {'是' if is_favorite else '否'}")
+                
+                # 显示人物信息（如果有）
+                people = asset.get('people', [])
+                if people:
+                    person_names = [p.get('name', 'N/A') if isinstance(p, dict) else getattr(p, 'name', 'N/A') for p in people]
+                    print(f"     人物: {', '.join(person_names)}")
+            
+            print("\n" + "=" * 80)
+            print("完整 JSON 数据:")
+            print("=" * 80)
+            print(json.dumps(assets, indent=2, ensure_ascii=False, default=str))
+            
+        else:
+            print("✗ 随机搜索失败，返回 None")
+            print("  可能的原因:")
+            print("  - 没有匹配的资产")
+            print("  - API 认证失败")
+            print("  - 网络连接问题")
+            print("  - 服务器错误")
+            
+    except Exception as e:
+        print(f"✗ 执行随机搜索时发生异常: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    print("\n" + "=" * 80)
+    print("测试完成")
+    print("=" * 80)
+
+
 async def main():
     """主函数"""
     # 默认测试的资产ID
     default_asset_id = "714f6b35-9f62-44f7-bc83-b8f29baf1296"
+    default_person_name = "Jason"
+    default_person_id = "8e4f5acf-aaf2-408b-b0b1-16ebfcc8ce96"
     
     # 检查命令行参数决定运行哪个测试
     if len(sys.argv) > 1:
@@ -870,6 +976,12 @@ async def main():
             person_name = sys.argv[2] if len(sys.argv) > 2 else "Jason"
             print(f"使用人物名称: {person_name}")
             await test_search_person(person_name)
+        elif test_type == "random":
+            # 运行随机搜索测试
+            person_name = sys.argv[2] if len(sys.argv) > 2 else "Jason"
+            size = int(sys.argv[3]) if len(sys.argv) > 3 else 5
+            print(f"使用人物名称: {person_name}, 返回数量: {size}")
+            await test_search_random(person_name, size)
         elif test_type == "all":
             # 运行所有下载相关测试
             asset_id = sys.argv[2] if len(sys.argv) > 2 else default_asset_id
