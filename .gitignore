@@ -184,3 +184,7 @@ uploadfile
 !main/manager-mobile/**/.env*
 !main/manager-mobile/**/*.json
 !main/xiaozhi-server/**/*.json
+
+
+# Reference files
+immich_python_sdk/
