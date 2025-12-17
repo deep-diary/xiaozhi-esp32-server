@@ -68,6 +68,7 @@ async def get_config_from_api_async(config):
         "url": config["manager-api"].get("url", ""),
         "secret": config["manager-api"].get("secret", ""),
     }
+    auth_enabled = config_data.get("server", {}).get("auth", {}).get("enabled", False)
     # server的配置以本地为准
     if config.get("server"):
         config_data["server"] = {
@@ -80,6 +81,7 @@ async def get_config_from_api_async(config):
     # Immich的配置以本地为准（因为Immich配置通常不会从manager-api获取）
     if config.get("Immich"):
         config_data["Immich"] = config.get("Immich")
+    config_data["server"]["auth"] = {"enabled": auth_enabled}
     # 如果服务器没有prompt_template，则从本地配置读取
     if not config_data.get("prompt_template"):
         config_data["prompt_template"] = config.get("prompt_template")
