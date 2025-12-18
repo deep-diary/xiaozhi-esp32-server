@@ -10,6 +10,7 @@ from core.utils.immich_client import ImmichClient
 import base64
 from typing import Tuple, Optional
 from plugins_func.register import Action
+from core.protocol.message_builder import WebMessageBuilder
 
 TAG = __name__
 
@@ -192,28 +193,21 @@ class VisionHandler:
             # 转发视觉识别结果到匹配的Web客户端
             if hasattr(self, 'server') and self.server and hasattr(self.server, 'forward_to_web_by_device_id'):
                 try:
-                    vision_message = {
-                        "type": "vision",
-                        "result": result,
-                        "people": people_names,
-                        "people_ids": people_ids,
-                        "session_id": device_id,  # 使用设备ID作为session_id
-                        "device_id": device_id,
-                    }
-                    
                     # 优先使用 Immich asset_id 构建图片 URL
+                    asset_id = None
+                    image_url = None
+                    image = None
+                    
                     if people_info and people_info.get("success") and people_info.get("asset_id"):
                         asset_id = people_info.get("asset_id")
-                        vision_message["asset_id"] = asset_id
                         
                         # 从 Immich API URL 提取基础 URL（例如：http://127.0.0.1:2283/api -> http://127.0.0.1:2283）
                         if self.immich_client and self.immich_client.api_url:
                             # 移除 /api 后缀，获取基础 URL
                             base_url = self.immich_client.api_url.replace("/api", "").rstrip("/")
                             # 构建 Immich 图片 URL
-                            immich_image_url = f"{base_url}/photos/{asset_id}"
-                            vision_message["image_url"] = immich_image_url
-                            self.logger.bind(tag=TAG).info(f"使用 Immich asset_id 构建图片 URL: {immich_image_url}")
+                            image_url = f"{base_url}/photos/{asset_id}"
+                            self.logger.bind(tag=TAG).info(f"使用 Immich asset_id 构建图片 URL: {image_url}")
                         else:
                             # 如果没有 Immich URL，使用 base64（降级方案）
                             image_format = "jpeg"
@@ -223,8 +217,7 @@ class VisionHandler:
                                 image_format = "gif"
                             elif image_data.startswith(b'BM'):
                                 image_format = "bmp"
-                            image_data_uri = f"data:image/{image_format};base64,{image_base64}"
-                            vision_message["image"] = image_data_uri
+                            image = f"data:image/{image_format};base64,{image_base64}"
                             self.logger.bind(tag=TAG).warning("Immich URL 未配置，使用 base64 图片（降级方案）")
                     else:
                         # 如果没有 asset_id，使用 base64（降级方案）
@@ -235,9 +228,19 @@ class VisionHandler:
                             image_format = "gif"
                         elif image_data.startswith(b'BM'):
                             image_format = "bmp"
-                        image_data_uri = f"data:image/{image_format};base64,{image_base64}"
-                        vision_message["image"] = image_data_uri
+                        image = f"data:image/{image_format};base64,{image_base64}"
                         self.logger.bind(tag=TAG).info("未获取到 Immich asset_id，使用 base64 图片（降级方案）")
+                    
+                    vision_message = WebMessageBuilder.build_vision_message(
+                        result=result,
+                        people=people_names,
+                        people_ids=people_ids,
+                        session_id=device_id,  # 使用设备ID作为session_id
+                        device_id=device_id,
+                        asset_id=asset_id,
+                        image_url=image_url,
+                        image=image
+                    )
                     
                     self.logger.bind(tag=TAG).info(f"准备转发视觉识别结果到Web客户端: device_id={device_id}, people={people_names}")
                     await self.server.forward_to_web_by_device_id(device_id, vision_message)

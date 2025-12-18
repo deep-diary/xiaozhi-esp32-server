@@ -8,6 +8,7 @@ from plugins_func.register import Action, ActionResponse
 from core.handle.sendAudioHandle import send_stt_message
 from core.utils.util import remove_punctuation_and_length
 from core.providers.tts.dto.dto import TTSMessageDTO, SentenceType
+from core.protocol.message_builder import WebMessageBuilder
 
 TAG = __name__
 
@@ -211,15 +212,15 @@ def speak_txt(conn, text):
         try:
             # 使用 run_coroutine_threadsafe 从同步函数调用异步方法
             if hasattr(conn, 'loop') and conn.loop:
+                message = WebMessageBuilder.build_llm_message(
+                    text=text,
+                    session_id=conn.session_id,
+                    device_id=conn.device_id
+                )
                 asyncio.run_coroutine_threadsafe(
                     conn.server.forward_to_web_by_device_id(
                         conn.device_id,
-                        {
-                            "type": "llm",
-                            "text": text,
-                            "session_id": conn.session_id,
-                            "device_id": conn.device_id
-                        }
+                        message
                     ),
                     conn.loop
                 )

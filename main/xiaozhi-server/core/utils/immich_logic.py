@@ -44,7 +44,7 @@ class ImmichLogic:
     async def search_random_by_person(
         self,
         person_name: str,
-        size: int = 10,
+        size: int = 4,
         city: Optional[str] = None,
         date: Optional[tuple] = None,
         **kwargs

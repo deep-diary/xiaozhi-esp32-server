@@ -13,10 +13,9 @@ from datetime import datetime
 from typing import Optional
 from config.logger import setup_logging
 from plugins_func.register import register_function, ToolType, ActionResponse, Action
-from core.utils.immich_api import ImmichAPI
-from core.utils.immich_logic import ImmichLogic
 from immich_python_sdk.models.asset_media_size import AssetMediaSize
 from immich_python_sdk.models.asset_visibility import AssetVisibility
+from core.protocol.message_builder import WebMessageBuilder
 
 TAG = __name__
 logger = setup_logging()
@@ -166,32 +165,30 @@ def search_from_immich(
         ActionResponse: 包含搜索结果或错误信息
     """
     try:
-        # 获取 Immich 配置
-        immich_config = conn.config.get("Immich", {})
-        if not immich_config:
-            logger.bind(tag=TAG).error("Immich 配置未找到")
-            return ActionResponse(
-                Action.RESPONSE, None, "Immich 相册服务未配置，无法搜索图片"
-            )
-        
-        # 检查配置是否启用
-        api_url = immich_config.get("api_url", "")
-        api_key = immich_config.get("api_key", "")
-        
-        if not api_url or not api_key:
-            logger.bind(tag=TAG).error("Immich API 配置不完整")
-            return ActionResponse(
-                Action.RESPONSE, None, "Immich 相册服务配置不完整，无法搜索图片"
-            )
-        
-        # 初始化 Immich API 和业务逻辑层
-        immich_api = ImmichAPI(immich_config)
-        if not immich_api.enabled:
+        # 使用连接对象的懒加载方法获取 ImmichLogic 实例
+        immich_logic = conn.get_immich_logic()
+        if not immich_logic:
+            # 检查具体原因，返回更详细的错误信息
+            immich_config = conn.config.get("Immich", {})
+            if not immich_config:
+                logger.bind(tag=TAG).error("Immich 配置未找到")
+                return ActionResponse(
+                    Action.RESPONSE, None, "Immich 相册服务未配置，无法搜索图片"
+                )
+            
+            api_url = immich_config.get("api_url", "")
+            api_key = immich_config.get("api_key", "")
+            
+            if not api_url or not api_key:
+                logger.bind(tag=TAG).error("Immich API 配置不完整")
+                return ActionResponse(
+                    Action.RESPONSE, None, "Immich 相册服务配置不完整，无法搜索图片"
+                )
+            
+            # 如果配置存在但不完整，可能是未启用
             return ActionResponse(
                 Action.RESPONSE, None, "Immich 相册服务未启用，无法搜索图片"
             )
-        
-        immich_logic = ImmichLogic(immich_api)
         
         # 构建搜索查询字符串
         query_parts = []
@@ -351,20 +348,14 @@ def search_from_immich(
                 # 通过socket接口发送资产列表给web端
                 if hasattr(conn, 'server') and conn.server and hasattr(conn.server, 'forward_to_web_by_device_id'):
                     try:
-                        import json
-                        message = {
-                            "type": "immich_search_result",
-                            "data": {
-                                "assets": assets,
-                                "count": len(assets),
-                                "query": query,
-                                "person_name": person_name,
-                                "city": city,
-                                "date": date,
-                                "device_id": conn.device_id
-                            },
-                            "device_id": conn.device_id
-                        }
+                        message = WebMessageBuilder.build_immich_search_result_message(
+                            assets=assets,
+                            query=query,
+                            device_id=conn.device_id,
+                            person_name=person_name,
+                            city=city,
+                            date=date
+                        )
                         # 在新线程的事件循环中发送消息
                         def send_message():
                             send_loop = asyncio.new_event_loop()

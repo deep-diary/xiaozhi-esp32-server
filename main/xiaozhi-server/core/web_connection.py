@@ -8,6 +8,8 @@ import logging
 import websockets
 from typing import Optional, Dict, Any
 from config.logger import setup_logging
+from core.protocol.message_builder import WebMessageBuilder
+from core.protocol.message_types import WebMessageType
 
 TAG = __name__
 
@@ -78,14 +80,15 @@ class WebConnectionHandler:
         """处理Web客户端的JSON消息"""
         msg_type = data.get("type", "")
         
-        if msg_type == "hello":
+        if msg_type == WebMessageType.HELLO.value:
             # 处理来自Web的聊天消息，转发到对应的设备连接
             content = data.get("content", "")
             if content and self.server:
                 await self._forward_to_device(content)
-        elif msg_type == "ping":
+        elif msg_type == WebMessageType.PING.value:
             # 心跳消息
-            await self.send_message({"type": "pong"})
+            pong_message = WebMessageBuilder.build_pong_message()
+            await self.send_message(pong_message)
         else:
             self.logger.bind(tag=TAG).debug(f"收到Web客户端消息: {msg_type}")
     
@@ -99,10 +102,8 @@ class WebConnectionHandler:
         if device_conn:
             # 转发消息到设备连接（通过文本消息处理）
             from core.handle.textHandle import handleTextMessage
-            await handleTextMessage(device_conn, json.dumps({
-                "type": "hello",
-                "content": content
-            }))
+            hello_message = WebMessageBuilder.build_hello_message(content=content)
+            await handleTextMessage(device_conn, json.dumps(hello_message))
         else:
             self.logger.bind(tag=TAG).warning(
                 f"未找到对应的设备连接: device_id={self.device_id}"
@@ -112,6 +113,16 @@ class WebConnectionHandler:
         """向Web客户端发送消息"""
         if self._closed or not self.websocket:
             return
+        
+        # 验证消息格式（可选，用于调试）
+        try:
+            from core.protocol.message_validator import WebMessageValidator
+            is_valid, error = WebMessageValidator.validate(message)
+            if not is_valid:
+                self.logger.bind(tag=TAG).warning(f"消息格式验证失败: {error}, message={message}")
+        except Exception:
+            # 验证失败不影响消息发送
+            pass
         
         try:
             await self.websocket.send(json.dumps(message))

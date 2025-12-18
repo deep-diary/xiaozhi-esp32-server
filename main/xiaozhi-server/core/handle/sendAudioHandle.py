@@ -5,6 +5,7 @@ from core.utils import textUtils
 from core.utils.util import audio_to_data
 from core.providers.tts.dto.dto import SentenceType
 from core.utils.audioRateController import AudioRateController
+from core.protocol.message_builder import WebMessageBuilder
 
 TAG = __name__
 # 音频帧时长（毫秒）
@@ -38,15 +39,12 @@ async def sendAudioMessage(conn, sentenceType, audios, text):
         # 转发每个句子到匹配的Web客户端（作为独立消息显示）
         if text and hasattr(conn, 'server') and conn.server and hasattr(conn.server, 'forward_to_web_by_device_id'):
             try:
-                await conn.server.forward_to_web_by_device_id(
-                    conn.device_id,
-                    {
-                        "type": "llm_sentence",  # 使用新类型，表示这是一个完整的句子
-                        "text": text,
-                        "session_id": conn.session_id,
-                        "device_id": conn.device_id
-                    }
+                message = WebMessageBuilder.build_llm_sentence_message(
+                    text=text,
+                    session_id=conn.session_id,
+                    device_id=conn.device_id
                 )
+                await conn.server.forward_to_web_by_device_id(conn.device_id, message)
                 conn.logger.bind(tag=TAG).debug(f"已转发句子到Web客户端: {text[:50]}...")
             except Exception as e:
                 conn.logger.bind(tag=TAG).error(f"转发句子到Web客户端失败: {e}")

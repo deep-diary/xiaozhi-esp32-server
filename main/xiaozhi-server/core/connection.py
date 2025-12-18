@@ -41,6 +41,7 @@ from config.manage_api_client import DeviceNotFoundException, DeviceBindExceptio
 from core.utils.prompt_manager import PromptManager
 from core.utils.voiceprint_provider import VoiceprintProvider
 from core.utils import textUtils
+from core.protocol.message_builder import WebMessageBuilder
 
 TAG = __name__
 
@@ -115,6 +116,10 @@ class ConnectionHandler:
 
         # 为每个连接单独管理声纹识别
         self.voiceprint_provider = None
+
+        # Immich 相关（懒加载）
+        self._immich_logic = None
+        self._immich_api = None
 
         # vad相关变量
         self.client_audio_buffer = bytearray()
@@ -922,15 +927,15 @@ class ConnectionHandler:
                     # 转发 LLM 回复到匹配的Web客户端
                     if hasattr(self.server, 'connection_manager'):
                         # 在同步方法中调用异步方法，使用 run_coroutine_threadsafe
+                        message = WebMessageBuilder.build_llm_message(
+                            text=content,
+                            session_id=self.session_id,
+                            device_id=self.device_id
+                        )
                         asyncio.run_coroutine_threadsafe(
                             self.server.forward_to_web_by_device_id(
                                 self.device_id,
-                                {
-                                    "type": "llm",
-                                    "text": content,
-                                    "session_id": self.session_id,
-                                    "device_id": self.device_id
-                                }
+                                message
                             ),
                             self.loop
                         )
@@ -1065,15 +1070,15 @@ class ConnectionHandler:
                 
                 # 转发工具调用结果到匹配的Web客户端
                 if text and hasattr(self.server, 'connection_manager'):
+                    message = WebMessageBuilder.build_llm_message(
+                        text=text,
+                        session_id=self.session_id,
+                        device_id=self.device_id
+                    )
                     asyncio.run_coroutine_threadsafe(
                         self.server.forward_to_web_by_device_id(
                             self.device_id,
-                            {
-                                "type": "llm",
-                                "text": text,
-                                "session_id": self.session_id,
-                                "device_id": self.device_id
-                            }
+                            message
                         ),
                         self.loop
                     )
@@ -1322,6 +1327,57 @@ class ConnectionHandler:
             self.logger.bind(tag=TAG).error(f"超时检查任务出错: {e}")
         finally:
             self.logger.bind(tag=TAG).info("超时检查任务已退出")
+
+    def get_immich_logic(self):
+        """获取 ImmichLogic 实例（懒加载）
+        
+        如果 Immich 未配置或未启用，返回 None。
+        首次调用时会初始化 ImmichAPI 和 ImmichLogic 实例。
+        
+        Returns:
+            ImmichLogic 实例，如果未配置或未启用则返回 None
+        """
+        # 如果已经初始化过，直接返回
+        if self._immich_logic is not None:
+            return self._immich_logic
+        
+        # 如果之前尝试初始化但失败了（设置为 False），直接返回 None
+        if self._immich_logic is False:
+            return None
+        
+        try:
+            # 获取 Immich 配置
+            immich_config = self.config.get("Immich", {})
+            if not immich_config:
+                self.logger.bind(tag=TAG).debug("Immich配置不存在")
+                self._immich_logic = False  # 标记为已检查但不存在
+                return None
+            
+            # 检查 Immich 是否启用
+            if not immich_config.get("api_url") or not immich_config.get("api_key"):
+                self.logger.bind(tag=TAG).debug("Immich配置不完整")
+                self._immich_logic = False  # 标记为已检查但不完整
+                return None
+            
+            # 初始化 ImmichAPI
+            from core.utils.immich_api import ImmichAPI
+            self._immich_api = ImmichAPI(immich_config)
+            
+            if not self._immich_api.enabled:
+                self.logger.bind(tag=TAG).debug("Immich API未启用")
+                self._immich_logic = False  # 标记为已检查但未启用
+                return None
+            
+            # 初始化 ImmichLogic
+            from core.utils.immich_logic import ImmichLogic
+            self._immich_logic = ImmichLogic(self._immich_api)
+            self.logger.bind(tag=TAG).debug("ImmichLogic 实例已初始化")
+            return self._immich_logic
+            
+        except Exception as e:
+            self.logger.bind(tag=TAG).error(f"初始化 ImmichLogic 失败: {e}", exc_info=True)
+            self._immich_logic = False  # 标记为初始化失败
+            return None
 
     def _merge_tool_calls(self, tool_calls_list, tools_call):
         """合并工具调用列表
