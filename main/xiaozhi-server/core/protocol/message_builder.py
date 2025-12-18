@@ -3,11 +3,31 @@ WebSocket消息构建器
 统一构建和格式化WebSocket消息，确保消息格式的一致性
 """
 from typing import Dict, Any, Optional, List
+from datetime import datetime
 from core.protocol.message_types import WebMessageType
 
 
 class WebMessageBuilder:
     """WebSocket消息构建器 - 统一构建WebSocket消息"""
+    
+    @staticmethod
+    def _serialize_datetime(obj: Any) -> Any:
+        """递归地将字典中的 datetime 对象转换为 ISO 格式字符串
+        
+        Args:
+            obj: 要处理的对象（可能是字典、列表、datetime 或其他类型）
+            
+        Returns:
+            处理后的对象，datetime 对象已转换为字符串
+        """
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        elif isinstance(obj, dict):
+            return {key: WebMessageBuilder._serialize_datetime(value) for key, value in obj.items()}
+        elif isinstance(obj, list):
+            return [WebMessageBuilder._serialize_datetime(item) for item in obj]
+        else:
+            return obj
     
     @staticmethod
     def build_hello_message(content: str) -> Dict[str, Any]:
@@ -217,7 +237,7 @@ class WebMessageBuilder:
         """构建Immich搜索结果消息（服务器 → Web客户端）
         
         Args:
-            assets: 资产列表
+            assets: 资产列表（可能包含 datetime 对象）
             query: 查询关键词
             device_id: 设备ID
             person_name: 查询的人物名称（可选）
@@ -225,12 +245,15 @@ class WebMessageBuilder:
             date: 查询的日期（可选）
             
         Returns:
-            Dict: Immich搜索结果消息字典
+            Dict: Immich搜索结果消息字典（所有 datetime 对象已转换为字符串）
         """
+        # 序列化资产数据中的 datetime 对象
+        serialized_assets = WebMessageBuilder._serialize_datetime(assets)
+        
         return {
             "type": WebMessageType.IMMICH_SEARCH_RESULT.value,
             "data": {
-                "assets": assets,
+                "assets": serialized_assets,
                 "count": len(assets),
                 "query": query,
                 "person_name": person_name,
