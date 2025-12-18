@@ -206,21 +206,25 @@ def speak_txt(conn, text):
     )
     conn.dialogue.put(Message(role="assistant", content=text))
     
-    # 广播上下文回答到 Gradio 客户端
-    if hasattr(conn, 'server') and conn.server and hasattr(conn.server, 'broadcast_to_gradio') and text:
+    # 转发上下文回答到匹配的Web客户端
+    if hasattr(conn, 'server') and conn.server and hasattr(conn.server, 'forward_to_web_by_device_id') and text:
         try:
             # 使用 run_coroutine_threadsafe 从同步函数调用异步方法
             if hasattr(conn, 'loop') and conn.loop:
                 asyncio.run_coroutine_threadsafe(
-                    conn.server.broadcast_to_gradio({
-                        "type": "llm",
-                        "text": text,
-                        "session_id": conn.session_id
-                    }),
+                    conn.server.forward_to_web_by_device_id(
+                        conn.device_id,
+                        {
+                            "type": "llm",
+                            "text": text,
+                            "session_id": conn.session_id,
+                            "device_id": conn.device_id
+                        }
+                    ),
                     conn.loop
                 )
             else:
                 # 如果没有 loop，尝试直接创建任务（可能在某些情况下有效）
-                conn.logger.bind(tag=TAG).warning("无法获取 event loop，无法广播上下文回答到 Gradio")
+                conn.logger.bind(tag=TAG).warning("无法获取 event loop，无法转发上下文回答到Web客户端")
         except Exception as e:
-            conn.logger.bind(tag=TAG).error(f"广播上下文回答到 Gradio 失败: {e}")
+            conn.logger.bind(tag=TAG).error(f"转发上下文回答到Web客户端失败: {e}")

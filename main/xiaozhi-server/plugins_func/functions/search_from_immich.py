@@ -269,6 +269,8 @@ def search_from_immich(
                                     immich_logic.search_random_by_person(
                                         person_name=person_name,
                                         size=max_count_value,
+                                        city=city,
+                                        date=date_range,
                                         visibility=AssetVisibility.TIMELINE
                                     ),
                                     timeout=timeout_seconds
@@ -347,7 +349,7 @@ def search_from_immich(
                     )
                 
                 # 通过socket接口发送资产列表给web端
-                if hasattr(conn, 'server') and conn.server and hasattr(conn.server, 'broadcast_to_gradio'):
+                if hasattr(conn, 'server') and conn.server and hasattr(conn.server, 'forward_to_web_by_device_id'):
                     try:
                         import json
                         message = {
@@ -358,15 +360,17 @@ def search_from_immich(
                                 "query": query,
                                 "person_name": person_name,
                                 "city": city,
-                                "date": date
-                            }
+                                "date": date,
+                                "device_id": conn.device_id
+                            },
+                            "device_id": conn.device_id
                         }
                         # 在新线程的事件循环中发送消息
                         def send_message():
                             send_loop = asyncio.new_event_loop()
                             asyncio.set_event_loop(send_loop)
                             try:
-                                send_loop.run_until_complete(conn.server.broadcast_to_gradio(message))
+                                send_loop.run_until_complete(conn.server.forward_to_web_by_device_id(conn.device_id, message))
                                 logger.bind(tag=TAG).info(f"已通过socket发送 {len(assets)} 个资产到web端")
                             except Exception as e:
                                 logger.bind(tag=TAG).error(f"发送资产列表到web端失败: {e}", exc_info=True)
@@ -378,7 +382,7 @@ def search_from_immich(
                     except Exception as e:
                         logger.bind(tag=TAG).error(f"创建发送线程失败: {e}", exc_info=True)
                 else:
-                    logger.bind(tag=TAG).warning("无法发送资产列表到web端: server或broadcast_to_gradio方法不存在")
+                    logger.bind(tag=TAG).warning("无法发送资产列表到web端: server或forward_to_web_by_device_id方法不存在")
                 
                 # 构建简洁的回复消息，只包含查询结果汇总信息，供LLM生成语音回复
                 search_conditions = []

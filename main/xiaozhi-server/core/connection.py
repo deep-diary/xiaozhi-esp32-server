@@ -919,15 +919,19 @@ class ConnectionHandler:
                 if not tool_call_flag:
                     response_message.append(content)
 
-                    # 广播 LLM 回复到 Gradio 客户端
-                    if hasattr(self.server, 'broadcast_to_gradio'):
+                    # 转发 LLM 回复到匹配的Web客户端
+                    if hasattr(self.server, 'connection_manager'):
                         # 在同步方法中调用异步方法，使用 run_coroutine_threadsafe
                         asyncio.run_coroutine_threadsafe(
-                            self.server.broadcast_to_gradio({
-                                "type": "llm",
-                                "text": content,
-                                "session_id": self.session_id
-                            }),
+                            self.server.forward_to_web_by_device_id(
+                                self.device_id,
+                                {
+                                    "type": "llm",
+                                    "text": content,
+                                    "session_id": self.session_id,
+                                    "device_id": self.device_id
+                                }
+                            ),
                             self.loop
                         )
 
@@ -1059,14 +1063,18 @@ class ConnectionHandler:
                 self.tts.tts_one_sentence(self, ContentType.TEXT, content_detail=text)
                 self.dialogue.put(Message(role="assistant", content=text))
                 
-                # 广播工具调用结果到 Gradio 客户端
-                if hasattr(self.server, 'broadcast_to_gradio') and text:
+                # 转发工具调用结果到匹配的Web客户端
+                if text and hasattr(self.server, 'connection_manager'):
                     asyncio.run_coroutine_threadsafe(
-                        self.server.broadcast_to_gradio({
-                            "type": "llm",
-                            "text": text,
-                            "session_id": self.session_id
-                        }),
+                        self.server.forward_to_web_by_device_id(
+                            self.device_id,
+                            {
+                                "type": "llm",
+                                "text": text,
+                                "session_id": self.session_id,
+                                "device_id": self.device_id
+                            }
+                        ),
                         self.loop
                     )
             elif result.action == Action.REQLLM:

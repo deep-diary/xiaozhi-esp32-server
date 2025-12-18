@@ -189,8 +189,8 @@ class VisionHandler:
                     result = f"{result}\n\n[识别到的人物：{people_str}]"
                     self.logger.bind(tag=TAG).info(f"VLLM回答中未提及人物，已补充人物信息: {people_names}")
 
-            # 广播视觉识别结果到 Gradio 客户端
-            if hasattr(self, 'server') and self.server and hasattr(self.server, 'broadcast_to_gradio'):
+            # 转发视觉识别结果到匹配的Web客户端
+            if hasattr(self, 'server') and self.server and hasattr(self.server, 'forward_to_web_by_device_id'):
                 try:
                     vision_message = {
                         "type": "vision",
@@ -198,6 +198,7 @@ class VisionHandler:
                         "people": people_names,
                         "people_ids": people_ids,
                         "session_id": device_id,  # 使用设备ID作为session_id
+                        "device_id": device_id,
                     }
                     
                     # 优先使用 Immich asset_id 构建图片 URL
@@ -238,15 +239,15 @@ class VisionHandler:
                         vision_message["image"] = image_data_uri
                         self.logger.bind(tag=TAG).info("未获取到 Immich asset_id，使用 base64 图片（降级方案）")
                     
-                    self.logger.bind(tag=TAG).info(f"准备广播视觉识别结果到Gradio客户端: device_id={device_id}, people={people_names}")
-                    await self.server.broadcast_to_gradio(vision_message)
-                    self.logger.bind(tag=TAG).info(f"视觉识别结果已广播到Gradio客户端")
+                    self.logger.bind(tag=TAG).info(f"准备转发视觉识别结果到Web客户端: device_id={device_id}, people={people_names}")
+                    await self.server.forward_to_web_by_device_id(device_id, vision_message)
+                    self.logger.bind(tag=TAG).info(f"视觉识别结果已转发到Web客户端")
                 except Exception as e:
-                    self.logger.bind(tag=TAG).error(f"广播视觉识别结果失败: {e}")
+                    self.logger.bind(tag=TAG).error(f"转发视觉识别结果失败: {e}")
                     import traceback
                     self.logger.bind(tag=TAG).error(f"错误堆栈: {traceback.format_exc()}")
             else:
-                self.logger.bind(tag=TAG).warning(f"无法广播视觉识别结果: server={hasattr(self, 'server')}, server对象={self.server if hasattr(self, 'server') else None}, broadcast方法={hasattr(self.server, 'broadcast_to_gradio') if hasattr(self, 'server') and self.server else False}")
+                self.logger.bind(tag=TAG).warning(f"无法转发视觉识别结果: server={hasattr(self, 'server')}, server对象={self.server if hasattr(self, 'server') else None}, forward方法={hasattr(self.server, 'forward_to_web_by_device_id') if hasattr(self, 'server') and self.server else False}")
 
             # 构建返回结果，保持原有协议不变
             return_json = {

@@ -35,17 +35,21 @@ async def sendAudioMessage(conn, sentenceType, audios, text):
             await send_tts_message(conn, "sentence_start", text)
 
         
-        # 广播每个句子到 Gradio 客户端（作为独立消息显示）
-        if text and hasattr(conn, 'server') and conn.server and hasattr(conn.server, 'broadcast_to_gradio'):
+        # 转发每个句子到匹配的Web客户端（作为独立消息显示）
+        if text and hasattr(conn, 'server') and conn.server and hasattr(conn.server, 'forward_to_web_by_device_id'):
             try:
-                await conn.server.broadcast_to_gradio({
-                    "type": "llm_sentence",  # 使用新类型，表示这是一个完整的句子
-                    "text": text,
-                    "session_id": conn.session_id
-                })
-                conn.logger.bind(tag=TAG).debug(f"已广播句子到 Gradio: {text[:50]}...")
+                await conn.server.forward_to_web_by_device_id(
+                    conn.device_id,
+                    {
+                        "type": "llm_sentence",  # 使用新类型，表示这是一个完整的句子
+                        "text": text,
+                        "session_id": conn.session_id,
+                        "device_id": conn.device_id
+                    }
+                )
+                conn.logger.bind(tag=TAG).debug(f"已转发句子到Web客户端: {text[:50]}...")
             except Exception as e:
-                conn.logger.bind(tag=TAG).error(f"广播句子到 Gradio 失败: {e}")
+                conn.logger.bind(tag=TAG).error(f"转发句子到Web客户端失败: {e}")
 
     await sendAudio(conn, audios)
     # 发送句子开始消息
@@ -319,8 +323,8 @@ async def send_stt_message(conn, text):
     if "时间过得真快" in text and "结束这场对话" in text:
         is_system_prompt = True
     
-    # 广播到 Gradio 客户端（系统提示词除外）
-    if not is_system_prompt and hasattr(conn, 'server') and conn.server and hasattr(conn.server, 'broadcast_to_gradio'):
-        await conn.server.broadcast_to_gradio(stt_message)
+    # 转发到匹配的Web客户端（系统提示词除外）
+    if not is_system_prompt and hasattr(conn, 'server') and conn.server and hasattr(conn.server, 'forward_to_web_by_device_id'):
+        await conn.server.forward_to_web_by_device_id(conn.device_id, stt_message)
     
     await send_tts_message(conn, "start")

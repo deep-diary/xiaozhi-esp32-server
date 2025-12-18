@@ -45,6 +45,8 @@ class ImmichLogic:
         self,
         person_name: str,
         size: int = 10,
+        city: Optional[str] = None,
+        date: Optional[tuple] = None,
         **kwargs
     ) -> Optional[List[Dict]]:
         """
@@ -55,6 +57,8 @@ class ImmichLogic:
         Args:
             person_name: 人物名称
             size: 返回的资产数量，默认10
+            city: 城市名称（可选）
+            date: 日期范围元组 (taken_after, taken_before)，可选
             **kwargs: 其他搜索参数（传递给 search_random）
         
         Returns:
@@ -78,8 +82,22 @@ class ImmichLogic:
             search_kwargs = {
                 "person_ids": person_ids,
                 "size": size,
-                **kwargs
             }
+            
+            # 处理城市参数
+            if city:
+                search_kwargs["city"] = city
+            
+            # 处理日期范围
+            if date:
+                taken_after, taken_before = date
+                if taken_after:
+                    search_kwargs["taken_after"] = taken_after
+                if taken_before:
+                    search_kwargs["taken_before"] = taken_before
+            
+            # 添加其他参数
+            search_kwargs.update(kwargs)
             
             assets = await self.api.search_random(**search_kwargs)
             

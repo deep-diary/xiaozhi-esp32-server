@@ -31,10 +31,13 @@ _setup_websockets_logger()
 
 
 from core.connection import ConnectionHandler
+from core.web_connection import WebConnectionHandler
+from core.connection_manager import ConnectionManager
 from config.config_loader import get_config_from_api_async
 from core.auth import AuthManager, AuthenticationError
 from core.utils.modules_initialize import initialize_modules
 from core.utils.util import check_vad_update, check_asr_update
+import json
 
 TAG = __name__
 
@@ -68,8 +71,8 @@ class WebSocketServer:
         expire_seconds = auth_config.get("expire_seconds", None)
         self.auth = AuthManager(secret_key=secret_key, expire_seconds=expire_seconds)
 
-        # Gradio 客户端连接集合
-        self.gradio_clients = set()
+        # 统一连接管理器
+        self.connection_manager = ConnectionManager()
 
     async def start(self):
         server_config = self.config["server"]
@@ -118,18 +121,20 @@ class WebSocketServer:
         is_gradio_client = client_id == "gradio-client" or device_id.startswith("web_")
 
         if is_gradio_client:
-            # 处理 Gradio 客户端连接
+            # 处理 Gradio/Web 客户端连接
             try:
                 await self._handle_auth(websocket)
-                await self.register_gradio_client(websocket)
-
-                # 保持连接活跃，监听断开
+                
+                # 创建WebConnectionHandler处理Web客户端连接
+                web_handler = WebConnectionHandler(websocket, device_id, self)
+                self.connection_manager.register_web(device_id, web_handler)
+                
                 try:
-                    await websocket.wait_closed()
+                    await web_handler.handle_connection()
                 except Exception as e:
-                    self.logger.bind(tag=TAG).error(f"Gradio 客户端连接异常: {e}")
+                    self.logger.bind(tag=TAG).error(f"Web客户端连接异常: {e}")
                 finally:
-                    await self.unregister_gradio_client(websocket)
+                    self.connection_manager.unregister_web(device_id, web_handler)
 
             except AuthenticationError:
                 await websocket.send("认证失败")
@@ -155,10 +160,14 @@ class WebSocketServer:
                 self,  # 传入server实例
             )
             try:
+                # 注册设备连接
+                self.connection_manager.register_device(device_id, handler)
                 await handler.handle_connection(websocket)
             except Exception as e:
                 self.logger.bind(tag=TAG).error(f"处理设备连接时出错: {e}")
             finally:
+                # 注销设备连接
+                self.connection_manager.unregister_device(device_id)
                 # 强制关闭连接（如果还没有关闭的话）
                 try:
                     # 安全地检查WebSocket状态并关闭
@@ -234,32 +243,25 @@ class WebSocketServer:
             self.logger.bind(tag=TAG).error(f"更新服务器配置失败: {str(e)}")
             return False
 
-    async def register_gradio_client(self, websocket):
-        """注册 Gradio 客户端"""
-        self.gradio_clients.add(websocket)
-        self.logger.bind(tag=TAG).info(f"注册新的 Gradio 客户端，当前客户端数量: {len(self.gradio_clients)}")
-
-    async def unregister_gradio_client(self, websocket):
-        """注销 Gradio 客户端"""
-        self.gradio_clients.discard(websocket)
-        self.logger.bind(tag=TAG).info(f"注销 Gradio 客户端，当前客户端数量: {len(self.gradio_clients)}")
-
-    async def broadcast_to_gradio(self, message):
-        """向所有 Gradio 客户端广播消息"""
-        if not self.gradio_clients:
-            return
-
-        disconnected_clients = set()
-        for client in self.gradio_clients.copy():
-            try:
-                await client.send(json.dumps(message))
-            except Exception as e:
-                self.logger.bind(tag=TAG).error(f"向 Gradio 客户端广播消息失败: {e}")
-                disconnected_clients.add(client)
-
-        # 清理断开的客户端
-        for client in disconnected_clients:
-            self.gradio_clients.discard(client)
+    def get_device_connection(self, device_id: str):
+        """根据device_id获取设备连接"""
+        return self.connection_manager.get_device_connection(device_id)
+    
+    async def broadcast_to_all_web(self, message: dict):
+        """广播消息到所有Web客户端"""
+        await self.connection_manager.broadcast_to_all_web(message)
+    
+    async def broadcast_to_all_devices(self, message: dict):
+        """广播消息到所有设备连接"""
+        await self.connection_manager.broadcast_to_all_devices(message)
+    
+    async def forward_to_web_by_device_id(self, device_id: str, message: dict):
+        """根据device_id转发消息到匹配的Web客户端"""
+        await self.connection_manager.forward_to_web_by_device_id(device_id, message)
+    
+    async def forward_to_device_by_device_id(self, device_id: str, message: dict):
+        """根据device_id转发消息到匹配的设备连接"""
+        await self.connection_manager.forward_to_device_by_device_id(device_id, message)
 
     async def _handle_auth(self, websocket):
         # 先认证，后建立连接

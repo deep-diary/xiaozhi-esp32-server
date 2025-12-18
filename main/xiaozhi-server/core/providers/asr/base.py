@@ -122,6 +122,26 @@ class ASRProviderBase(ABC):
                 logger.bind(tag=TAG).info(f"识别文本: {raw_text}")
             if speaker_name:
                 logger.bind(tag=TAG).info(f"识别说话人: {speaker_name}")
+                
+                # 识别到有效声纹后，向web端发送识别结果，触发web端从immich获取该人物的照片
+                if speaker_name and speaker_name != "未知说话人":
+                    try:
+                        if hasattr(conn, 'server') and conn.server and hasattr(conn.server, 'forward_to_web_by_device_id'):
+                            message = {
+                                "type": "voiceprint_identified",
+                                "data": {
+                                    "speaker_name": speaker_name,
+                                    "session_id": conn.session_id,
+                                    "device_id": conn.device_id,
+                                    "timestamp": time.time()
+                                }
+                            }
+                            await conn.server.forward_to_web_by_device_id(conn.device_id, message)
+                            logger.bind(tag=TAG).info(f"已向web端发送声纹识别结果: {speaker_name}")
+                        else:
+                            logger.bind(tag=TAG).warning("无法发送声纹识别结果到web端: server或forward_to_web_by_device_id方法不存在")
+                    except Exception as e:
+                        logger.bind(tag=TAG).error(f"发送声纹识别结果到web端失败: {e}", exc_info=True)
 
             # 性能监控
             total_time = time.monotonic() - total_start_time
