@@ -21,73 +21,68 @@ TAG = __name__
 logger = setup_logging()
 
 
-async def search_and_send_person_photos(conn, speaker_name: str):
-    """异步搜索人物照片并发送到前端
+async def send_kiosk_url_for_person(conn, speaker_name: str):
+    """异步获取人物ID并发送 Kiosk URL 到前端
     
     Args:
         conn: 连接对象
         speaker_name: 说话人名称
     """
     try:
-        # 使用连接对象的懒加载方法获取 ImmichLogic 实例
-        immich_logic = conn.get_immich_logic()
-        if not immich_logic:
-            logger.bind(tag=TAG).debug("ImmichLogic 不可用，跳过照片搜索")
+        # 获取 Immich 配置
+        immich_config = conn.config.get("Immich", {})
+        kiosk_base_url = immich_config.get("kiosk_url", "")
+        
+        if not kiosk_base_url:
+            logger.bind(tag=TAG).warning("Immich Kiosk URL 未配置，无法发送 Kiosk URL")
             return
         
+        # 使用连接对象的懒加载方法获取 ImmichLogic 实例
+        immich_logic = conn.get_immich_logic()
+        person_id = None
+        
+        # 尝试获取人物 ID（不阻塞，如果失败则使用 person_name）
+        if immich_logic:
+            try:
+                person_ids = await immich_logic.api.search_person(
+                    name=speaker_name,
+                    return_ids=True,
+                    timeout=5.0
+                )
+                if person_ids and len(person_ids) > 0:
+                    # 取第一个匹配的人物 ID
+                    person_id = person_ids[0]
+                    logger.bind(tag=TAG).info(
+                        f"成功获取人物ID: {speaker_name} -> {person_id}"
+                    )
+            except Exception as e:
+                logger.bind(tag=TAG).warning(
+                    f"获取人物ID失败，将使用person_name作为降级方案: {e}"
+                )
+        
+        # 构建 Kiosk URL
+        if person_id:
+            kiosk_url = f"{kiosk_base_url.rstrip('/')}/?person={person_id}"
+        else:
+            # 降级方案：使用 person_name
+            kiosk_url = f"{kiosk_base_url.rstrip('/')}/?person={speaker_name}"
+        
+        # 构建并发送消息
         from core.protocol.message_builder import WebMessageBuilder
-        
-        # 获取 Immich 配置（用于读取 voiceprint_photo_count）
-        immich_config = conn.config.get("Immich", {})
-        
-        # 搜索人物照片（随机返回10张）
-        # 使用默认的 size=4，但可以通过配置调整
-        photo_count = immich_config.get("voiceprint_photo_count", 10)
-        assets = await immich_logic.search_random_by_person(
+        message = WebMessageBuilder.build_immich_kiosk_url_message(
+            kiosk_url=kiosk_url,
             person_name=speaker_name,
-            size=photo_count
+            person_id=person_id,
+            device_id=conn.device_id
         )
         
-        if assets and len(assets) > 0:
-            # 格式化资产数据，只包含必要字段（不包含URL，因为Immich URL不是公开的）
-            formatted_assets = []
-            for asset in assets:
-                # 提取资产基本信息
-                asset_dict = {
-                    "id": asset.get("id"),  # asset_id，前端可以通过此ID访问照片
-                    "type": asset.get("type"),  # IMAGE 或 VIDEO
-                    "createdAt": asset.get("createdAt"),  # 创建时间
-                    "localDateTime": asset.get("localDateTime"),  # 本地时间
-                    "originalFileName": asset.get("originalFileName"),  # 原始文件名
-                }
-                
-                # 添加 EXIF 信息（如果有）
-                if asset.get("exifInfo"):
-                    asset_dict["exifInfo"] = asset.get("exifInfo")
-                
-                # 添加其他有用信息
-                if asset.get("isFavorite") is not None:
-                    asset_dict["isFavorite"] = asset.get("isFavorite")
-                
-                formatted_assets.append(asset_dict)
-            
-            # 发送搜索结果到前端
-            message = WebMessageBuilder.build_immich_search_result_message(
-                assets=formatted_assets,
-                query="voiceprint_triggered",  # 标识这是声纹触发的搜索
-                device_id=conn.device_id,
-                person_name=speaker_name
-            )
-            
-            await conn.server.forward_to_web_by_device_id(conn.device_id, message)
-            logger.bind(tag=TAG).info(
-                f"已发送 {len(formatted_assets)} 张照片到web端（声纹识别触发）: {speaker_name}"
-            )
-        else:
-            logger.bind(tag=TAG).debug(f"未找到 {speaker_name} 的照片")
+        await conn.server.forward_to_web_by_device_id(conn.device_id, message)
+        logger.bind(tag=TAG).info(
+            f"已发送 Kiosk URL 到前端: {kiosk_url}, person_id={person_id}, person_name={speaker_name}"
+        )
             
     except Exception as e:
-        logger.bind(tag=TAG).error(f"搜索并发送人物照片失败: {e}", exc_info=True)
+        logger.bind(tag=TAG).error(f"获取人物ID并发送Kiosk URL失败: {e}", exc_info=True)
 
 
 class ASRProviderBase(ABC):
@@ -192,16 +187,16 @@ class ASRProviderBase(ABC):
             if speaker_name:
                 logger.bind(tag=TAG).info(f"识别说话人: {speaker_name}")
                 
-                # 识别到有效声纹后，异步从Immich搜索该人物的照片并发送给前端
+                # 识别到有效声纹后，异步获取人物ID并发送 Kiosk URL 给前端
                 if speaker_name and speaker_name != "未知说话人":
-                    # 异步搜索并发送照片（不阻塞主流程）
+                    # 异步获取人物ID并发送 Kiosk URL（不阻塞主流程）
                     if hasattr(conn, 'server') and conn.server and hasattr(conn.server, 'forward_to_web_by_device_id'):
                         # 使用 create_task 异步执行，不阻塞当前流程
                         asyncio.create_task(
-                            search_and_send_person_photos(conn, speaker_name)
+                            send_kiosk_url_for_person(conn, speaker_name)
                         )
                     else:
-                        logger.bind(tag=TAG).warning("无法搜索人物照片: server或forward_to_web_by_device_id方法不存在")
+                        logger.bind(tag=TAG).warning("无法发送 Kiosk URL: server或forward_to_web_by_device_id方法不存在")
 
             # 性能监控
             total_time = time.monotonic() - total_start_time

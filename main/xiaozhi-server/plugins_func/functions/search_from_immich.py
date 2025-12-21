@@ -241,10 +241,10 @@ def search_from_immich(
                     asyncio.set_event_loop(new_loop)
                     
                     try:
-                        # 根据是否有query参数决定调用智能搜索还是随机搜索
+                        # 根据是否有query参数决定调用智能搜索还是发送 Kiosk URL
                         if query:
-                            # 有query参数，调用智能搜索
-                            logger.bind(tag=TAG).info("使用智能搜索")
+                            # 有query参数，调用智能搜索（自然语言搜索）
+                            logger.bind(tag=TAG).info("使用智能搜索（自然语言搜索）")
                             assets = new_loop.run_until_complete(
                                 asyncio.wait_for(
                                     immich_logic.search_smart_assets(
@@ -258,34 +258,64 @@ def search_from_immich(
                                     timeout=timeout_seconds
                                 )
                             )
+                            
+                            # 确保 assets 是列表类型
+                            if assets is not None and not isinstance(assets, list):
+                                logger.bind(tag=TAG).error(f"搜索返回了非列表类型: {type(assets)}, 值: {assets}")
+                                result_container["exception"] = TypeError(f"搜索返回了非列表类型: {type(assets)}")
+                                return
+                            
+                            result_container["result"] = {"type": "search_result", "assets": assets}
+                            logger.bind(tag=TAG).info(f"搜索完成，找到 {len(assets) if assets else 0} 个资产")
                         elif person_name:
-                            # query为空但人物信息不为空，调用随机检索
-                            logger.bind(tag=TAG).info(f"使用随机搜索，人物: {person_name}")
-                            assets = new_loop.run_until_complete(
-                                asyncio.wait_for(
-                                    immich_logic.search_random_by_person(
-                                        person_name=person_name,
-                                        size=max_count_value,
-                                        city=city,
-                                        date=date_range,
-                                        visibility=AssetVisibility.TIMELINE
-                                    ),
-                                    timeout=timeout_seconds
+                            # query为空但人物信息不为空，发送 Kiosk URL（随机人物搜索）
+                            logger.bind(tag=TAG).info(f"使用随机人物搜索，发送 Kiosk URL: {person_name}")
+                            
+                            # 获取人物 ID（使用 run_until_complete 执行异步操作）
+                            person_id = None
+                            try:
+                                person_ids = new_loop.run_until_complete(
+                                    asyncio.wait_for(
+                                        immich_logic.api.search_person(
+                                            name=person_name,
+                                            return_ids=True,
+                                            timeout=5.0
+                                        ),
+                                        timeout=5.0
+                                    )
                                 )
-                            )
+                                if person_ids and len(person_ids) > 0:
+                                    person_id = person_ids[0]
+                                    logger.bind(tag=TAG).info(f"成功获取人物ID: {person_name} -> {person_id}")
+                            except Exception as e:
+                                logger.bind(tag=TAG).warning(f"获取人物ID失败，将使用person_name: {e}")
+                            
+                            # 获取 Kiosk URL
+                            immich_config = conn.config.get("Immich", {})
+                            kiosk_base_url = immich_config.get("kiosk_url", "")
+                            
+                            if not kiosk_base_url:
+                                result_container["exception"] = ValueError("Immich Kiosk URL 未配置")
+                                return
+                            
+                            # 构建 Kiosk URL
+                            if person_id:
+                                kiosk_url = f"{kiosk_base_url.rstrip('/')}/?person={person_id}"
+                            else:
+                                # 降级方案：使用 person_name
+                                kiosk_url = f"{kiosk_base_url.rstrip('/')}/?person={person_name}"
+                            
+                            result_container["result"] = {
+                                "type": "kiosk_url",
+                                "kiosk_url": kiosk_url,
+                                "person_name": person_name,
+                                "person_id": person_id
+                            }
+                            logger.bind(tag=TAG).info(f"Kiosk URL 构建完成: {kiosk_url}")
                         else:
                             # 既没有query也没有person_name，返回错误
                             result_container["exception"] = ValueError("请提供至少一个搜索条件（人物名称或文字描述）")
                             return
-                        
-                        # 确保 assets 是列表类型
-                        if assets is not None and not isinstance(assets, list):
-                            logger.bind(tag=TAG).error(f"搜索返回了非列表类型: {type(assets)}, 值: {assets}")
-                            result_container["exception"] = TypeError(f"搜索返回了非列表类型: {type(assets)}")
-                            return
-                        
-                        result_container["result"] = assets
-                        logger.bind(tag=TAG).info(f"搜索完成，找到 {len(assets) if assets else 0} 个资产")
                     except asyncio.TimeoutError:
                         logger.bind(tag=TAG).error(f"搜索超时（{timeout_seconds}秒）")
                         result_container["exception"] = TimeoutError(f"搜索超时（{timeout_seconds}秒）")
@@ -320,86 +350,128 @@ def search_from_immich(
                     else:
                         raise result_container["exception"]
                 
-                assets = result_container["result"]
+                result = result_container["result"]
                 
-                # 确保 assets 是列表类型
-                if assets is not None and not isinstance(assets, list):
-                    logger.bind(tag=TAG).error(f"搜索结果不是列表类型: {type(assets)}, 值: {assets}")
-                    return ActionResponse(
-                        Action.RESPONSE,
-                        None,
-                        f"搜索返回了错误的数据类型: {type(assets).__name__}"
-                    )
-                
-                # 统计实际找到的资产数量（这是真实的搜索结果，不是请求数量）
-                actual_count = len(assets) if assets else 0
-                logger.bind(tag=TAG).info(
-                    f"搜索任务完成: 实际找到 {actual_count} 个资产 "
-                    f"(请求数量: {max_count_value}, 这是真实的搜索结果)"
-                )
-                
-                if not assets:
-                    return ActionResponse(
-                        Action.RESPONSE,
-                        None,
-                        "未找到相关照片，请尝试其他搜索条件"
-                    )
-                
-                # 通过socket接口发送资产列表给web端
-                if hasattr(conn, 'server') and conn.server and hasattr(conn.server, 'forward_to_web_by_device_id'):
-                    try:
-                        message = WebMessageBuilder.build_immich_search_result_message(
-                            assets=assets,
-                            query=query,
-                            device_id=conn.device_id,
-                            person_name=person_name,
-                            city=city,
-                            date=date
+                # 根据结果类型处理
+                if result["type"] == "search_result":
+                    # 自然语言搜索结果：发送 IMMICH_SEARCH_RESULT 消息
+                    assets = result["assets"]
+                    
+                    # 确保 assets 是列表类型
+                    if assets is not None and not isinstance(assets, list):
+                        logger.bind(tag=TAG).error(f"搜索结果不是列表类型: {type(assets)}, 值: {assets}")
+                        return ActionResponse(
+                            Action.RESPONSE,
+                            None,
+                            f"搜索返回了错误的数据类型: {type(assets).__name__}"
                         )
-                        # 在新线程的事件循环中发送消息
-                        def send_message():
-                            send_loop = asyncio.new_event_loop()
-                            asyncio.set_event_loop(send_loop)
-                            try:
-                                send_loop.run_until_complete(conn.server.forward_to_web_by_device_id(conn.device_id, message))
-                                logger.bind(tag=TAG).info(f"已通过socket发送 {len(assets)} 个资产到web端")
-                            except Exception as e:
-                                logger.bind(tag=TAG).error(f"发送资产列表到web端失败: {e}", exc_info=True)
-                            finally:
-                                send_loop.close()
-                        
-                        send_thread = threading.Thread(target=send_message, daemon=True)
-                        send_thread.start()
-                    except Exception as e:
-                        logger.bind(tag=TAG).error(f"创建发送线程失败: {e}", exc_info=True)
-                else:
-                    logger.bind(tag=TAG).warning("无法发送资产列表到web端: server或forward_to_web_by_device_id方法不存在")
+                    
+                    # 统计实际找到的资产数量
+                    actual_count = len(assets) if assets else 0
+                    logger.bind(tag=TAG).info(
+                        f"搜索任务完成: 实际找到 {actual_count} 个资产 "
+                        f"(请求数量: {max_count_value}, 这是真实的搜索结果)"
+                    )
+                    
+                    if not assets:
+                        return ActionResponse(
+                            Action.RESPONSE,
+                            None,
+                            "未找到相关照片，请尝试其他搜索条件"
+                        )
+                    
+                    # 通过socket接口发送资产列表给web端
+                    if hasattr(conn, 'server') and conn.server and hasattr(conn.server, 'forward_to_web_by_device_id'):
+                        try:
+                            message = WebMessageBuilder.build_immich_search_result_message(
+                                assets=assets,
+                                query=query,
+                                device_id=conn.device_id,
+                                person_name=person_name,
+                                city=city,
+                                date=date
+                            )
+                            # 在新线程的事件循环中发送消息
+                            def send_message():
+                                send_loop = asyncio.new_event_loop()
+                                asyncio.set_event_loop(send_loop)
+                                try:
+                                    send_loop.run_until_complete(conn.server.forward_to_web_by_device_id(conn.device_id, message))
+                                    logger.bind(tag=TAG).info(f"已通过socket发送 {len(assets)} 个资产到web端")
+                                except Exception as e:
+                                    logger.bind(tag=TAG).error(f"发送资产列表到web端失败: {e}", exc_info=True)
+                                finally:
+                                    send_loop.close()
+                            
+                            send_thread = threading.Thread(target=send_message, daemon=True)
+                            send_thread.start()
+                        except Exception as e:
+                            logger.bind(tag=TAG).error(f"创建发送线程失败: {e}", exc_info=True)
+                    else:
+                        logger.bind(tag=TAG).warning("无法发送资产列表到web端: server或forward_to_web_by_device_id方法不存在")
+                    
+                    # 构建简洁的回复消息
+                    search_conditions = []
+                    if person_name:
+                        search_conditions.append(f"人物：{person_name}")
+                    if city:
+                        search_conditions.append(f"城市：{city}")
+                    if date:
+                        search_conditions.append(f"日期：{date}")
+                    if query and query != "photo":
+                        search_conditions.append(f"描述：{query}")
+                    
+                    conditions_text = "、".join(search_conditions) if search_conditions else "所有照片"
+                    
+                    if actual_count > 0:
+                        response_message = f"搜索完成！根据条件（{conditions_text}）找到了 {actual_count} 张相关照片。所有照片已发送到前端展示，您可以在界面上查看。"
+                    else:
+                        response_message = f"搜索完成！根据条件（{conditions_text}）未找到相关照片，请尝试其他搜索条件。"
+                    
+                    logger.bind(tag=TAG).info(f"构建回复消息: {response_message[:100]}...")
+                    
+                    return ActionResponse(Action.REQLLM, response_message, None)
                 
-                # 构建简洁的回复消息，只包含查询结果汇总信息，供LLM生成语音回复
-                search_conditions = []
-                if person_name:
-                    search_conditions.append(f"人物：{person_name}")
-                if city:
-                    search_conditions.append(f"城市：{city}")
-                if date:
-                    search_conditions.append(f"日期：{date}")
-                if query and query != "photo":
-                    search_conditions.append(f"描述：{query}")
-                
-                conditions_text = "、".join(search_conditions) if search_conditions else "所有照片"
-                
-                # 统计实际找到的照片数量（这是真实的搜索结果，不是请求数量）
-                actual_count = len(assets) if assets else 0
-                
-                # 构建简洁的回复消息（只包含汇总信息，不列出每张照片的详细信息）
-                if actual_count > 0:
-                    response_message = f"搜索完成！根据条件（{conditions_text}）找到了 {actual_count} 张相关照片。所有照片已发送到前端展示，您可以在界面上查看。"
-                else:
-                    response_message = f"搜索完成！根据条件（{conditions_text}）未找到相关照片，请尝试其他搜索条件。"
-                
-                logger.bind(tag=TAG).info(f"构建回复消息: {response_message[:100]}...")
-                
-                return ActionResponse(Action.REQLLM, response_message, None)
+                elif result["type"] == "kiosk_url":
+                    # 随机人物搜索：发送 IMMICH_KIOSK_URL 消息
+                    kiosk_url = result["kiosk_url"]
+                    person_name_result = result["person_name"]
+                    person_id_result = result.get("person_id")
+                    
+                    # 通过socket接口发送 Kiosk URL 给web端
+                    if hasattr(conn, 'server') and conn.server and hasattr(conn.server, 'forward_to_web_by_device_id'):
+                        try:
+                            message = WebMessageBuilder.build_immich_kiosk_url_message(
+                                kiosk_url=kiosk_url,
+                                person_name=person_name_result,
+                                person_id=person_id_result,
+                                device_id=conn.device_id
+                            )
+                            # 在新线程的事件循环中发送消息
+                            def send_message():
+                                send_loop = asyncio.new_event_loop()
+                                asyncio.set_event_loop(send_loop)
+                                try:
+                                    send_loop.run_until_complete(conn.server.forward_to_web_by_device_id(conn.device_id, message))
+                                    logger.bind(tag=TAG).info(f"已通过socket发送 Kiosk URL 到web端: {kiosk_url}")
+                                except Exception as e:
+                                    logger.bind(tag=TAG).error(f"发送 Kiosk URL 到web端失败: {e}", exc_info=True)
+                                finally:
+                                    send_loop.close()
+                            
+                            send_thread = threading.Thread(target=send_message, daemon=True)
+                            send_thread.start()
+                        except Exception as e:
+                            logger.bind(tag=TAG).error(f"创建发送线程失败: {e}", exc_info=True)
+                    else:
+                        logger.bind(tag=TAG).warning("无法发送 Kiosk URL 到web端: server或forward_to_web_by_device_id方法不存在")
+                    
+                    # 构建简洁的回复消息
+                    response_message = f"已为您打开 {person_name_result} 的照片轮播。"
+                    
+                    logger.bind(tag=TAG).info(f"构建回复消息: {response_message}")
+                    
+                    return ActionResponse(Action.REQLLM, response_message, None)
             else:
                 logger.bind(tag=TAG).error(f"等待搜索任务超时（{timeout_seconds + 10}秒）")
                 return ActionResponse(

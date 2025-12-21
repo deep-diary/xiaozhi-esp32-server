@@ -89,6 +89,17 @@ class WebMessageValidator:
             if "assets" not in data:
                 return False, "IMMICH_SEARCH_RESULT消息的data字段缺少assets字段"
         
+        elif msg_type == WebMessageType.IMMICH_KIOSK_URL.value:
+            required = ["data", "device_id"]
+            if not all(field in message for field in required):
+                return False, f"IMMICH_KIOSK_URL消息缺少必需字段: {', '.join(required)}"
+            # 验证data字段结构
+            data = message.get("data")
+            if not isinstance(data, dict):
+                return False, "IMMICH_KIOSK_URL消息的data字段必须是字典类型"
+            if "kiosk_url" not in data:
+                return False, "IMMICH_KIOSK_URL消息的data字段缺少kiosk_url字段"
+        
         elif msg_type == WebMessageType.HELLO.value:
             if "content" not in message:
                 return False, "HELLO消息缺少必需字段: content"

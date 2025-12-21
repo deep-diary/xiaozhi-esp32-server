@@ -334,4 +334,36 @@ class WebMessageBuilder:
             "matches": matches,
             "session_id": session_id
         }
+    
+    @staticmethod
+    def build_immich_kiosk_url_message(
+        kiosk_url: str,
+        device_id: str,
+        person_name: Optional[str] = None,
+        person_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """构建 Immich Kiosk URL 消息（服务器 → Web客户端）
+        
+        Args:
+            kiosk_url: Immich Kiosk 完整 URL（包含参数）
+            device_id: 设备ID
+            person_name: 人物名称（可选）
+            person_id: 人物 ID（可选）
+            
+        Returns:
+            Dict: Immich Kiosk URL 消息字典
+        """
+        message = {
+            "type": WebMessageType.IMMICH_KIOSK_URL.value,
+            "data": {
+                "kiosk_url": kiosk_url,
+                "device_id": device_id
+            },
+            "device_id": device_id
+        }
+        if person_name:
+            message["data"]["person_name"] = person_name
+        if person_id:
+            message["data"]["person_id"] = person_id
+        return message
 

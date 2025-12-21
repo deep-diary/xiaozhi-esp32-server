@@ -23,6 +23,7 @@ class WebMessageType(str, Enum):
     # 视觉和记忆
     VISION = "vision"                      # 视觉识别结果
     IMMICH_SEARCH_RESULT = "immich_search_result"  # Immich搜索结果
+    IMMICH_KIOSK_URL = "immich_kiosk_url"  # Immich Kiosk URL（用于照片轮播）
     MEMORY_MARKDOWN = "memory_markdown"    # 记忆Markdown内容
     MEMORY_IMAGES = "memory_images"        # 记忆图片列表
     
@@ -77,6 +78,7 @@ class WebMessageType(str, Enum):
             cls.VOICEPRINT_IDENTIFIED.value,
             cls.VISION.value,
             cls.IMMICH_SEARCH_RESULT.value,
+            cls.IMMICH_KIOSK_URL.value,
             cls.MEMORY_MARKDOWN.value,
             cls.MEMORY_IMAGES.value,
             cls.RESOURCE_MATCH.value,
