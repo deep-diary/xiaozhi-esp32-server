@@ -217,7 +217,7 @@ def search_from_immich(
                 logger.bind(tag=TAG).warning(f"日期范围解析失败，将不使用日期过滤: {date}")
         
         # 设置最大数量
-        max_count_value = max_count or 5
+        max_count_value = max_count or 6
         
         logger.bind(tag=TAG).info(
             f"准备搜索 Immich 图片: query='{query}', "
