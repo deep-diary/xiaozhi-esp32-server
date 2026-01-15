@@ -4,7 +4,7 @@
       <!-- 左侧元素 -->
       <div class="header-left" @click="goHome">
         <img loading="lazy" alt="" src="@/assets/xiaozhi-logo.png" class="logo-img" />
-        <img loading="lazy" alt="" src="@/assets/xiaozhi-ai.png" class="brand-img" />
+        <img loading="lazy" alt="" :src="xiaozhiAiIcon" class="brand-img" />
       </div>
 
       <!-- 中间导航菜单 -->
@@ -257,6 +257,24 @@ export default {
           return this.$t("language.zhCN");
       }
     },
+    // 根据当前语言获取对应的xiaozhi-ai图标
+    xiaozhiAiIcon() {
+      const currentLang = this.currentLanguage;
+      switch (currentLang) {
+        case "zh_CN":
+          return require("@/assets/xiaozhi-ai.png");
+        case "zh_TW":
+          return require("@/assets/xiaozhi-ai_zh_TW.png");
+        case "en":
+          return require("@/assets/xiaozhi-ai_en.png");
+        case "de":
+          return require("@/assets/xiaozhi-ai_de.png");
+        case "vi":
+          return require("@/assets/xiaozhi-ai_vi.png");
+        default:
+          return require("@/assets/xiaozhi-ai.png");
+      }
+    },
     // 用户菜单选项
     userMenuOptions() {
       return [
@@ -390,18 +408,8 @@ export default {
       // 保存搜索历史
       this.saveSearchHistory(searchValue);
 
-      try {
-        // 创建不区分大小写的正则表达式
-        const regex = new RegExp(searchValue, "i");
-        // 触发搜索事件，将正则表达式传递给父组件
-        this.$emit("search", regex);
-      } catch (error) {
-        console.error("正则表达式创建失败:", error);
-        this.$message.error({
-          message: this.$t("message.error"),
-          showClose: true,
-        });
-      }
+      // 触发搜索事件，将搜索关键词传递给父组件
+      this.$emit("search", searchValue);
 
       // 搜索完成后让输入框失去焦点，从而触发blur事件隐藏搜索历史
       if (this.$refs.searchInput) {

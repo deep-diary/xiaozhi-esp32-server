@@ -4,15 +4,15 @@ import json
 import queue
 import asyncio
 import traceback
-from typing import Callable, Any
 import websockets
+
+from typing import Callable, Any
 from core.utils.tts import MarkdownCleaner
 from config.logger import setup_logging
 from core.utils import opus_encoder_utils
 from core.utils.util import check_model_key
 from core.providers.tts.base import TTSProviderBase
 from core.providers.tts.dto.dto import SentenceType, ContentType, InterfaceType
-from asyncio import Task
 
 
 TAG = __name__
@@ -160,10 +160,16 @@ class TTSProvider(TTSProviderBase):
         self.speech_rate = int(speech_rate) if speech_rate else 0
         self.loudness_rate = int(loudness_rate) if loudness_rate else 0
         self.pitch = int(pitch) if pitch else 0
+        # 多情感音色参数
+        self.emotion = config.get("emotion", "neutral")  
+        emotion_scale = config.get("emotion_scale", "4")
+        self.emotion_scale = int(emotion_scale) if emotion_scale else 4
+
         self.ws_url = config.get("ws_url")
         self.authorization = config.get("authorization")
         self.header = {"Authorization": f"{self.authorization}{self.access_token}"}
-        self.enable_two_way = True
+        enable_ws_reuse_value = config.get("enable_ws_reuse", True)
+        self.enable_ws_reuse = False if str(enable_ws_reuse_value).lower() == 'false' else True
         self.tts_text = ""
         self.opus_encoder = opus_encoder_utils.OpusEncoderUtils(
             sample_rate=16000, channels=1, frame_size_ms=60
@@ -184,8 +190,14 @@ class TTSProvider(TTSProviderBase):
         """建立新的WebSocket连接，并启动监听任务（仅第一次）"""
         try:
             if self.ws:
-                logger.bind(tag=TAG).info(f"使用已有链接...")
-                return self.ws
+                if self.enable_ws_reuse:
+                    logger.bind(tag=TAG).info(f"使用已有链接...")
+                    return self.ws
+                else:
+                    try:
+                        await self.finish_connection()
+                    except:
+                        pass
             logger.bind(tag=TAG).debug("开始建立新连接...")
             ws_header = {
                 "X-Api-App-Key": self.appId,
@@ -208,6 +220,22 @@ class TTSProvider(TTSProviderBase):
             logger.bind(tag=TAG).error(f"建立连接失败: {str(e)}")
             self.ws = None
             raise
+    
+    async def finish_connection(self):
+        """发送 FinishConnection 事件，等待服务端返回 EVENT_ConnectionFinished"""
+        try:
+            if self.ws:
+                logger.bind(tag=TAG).debug("开始关闭连接...")
+                header = Header(
+                    message_type=FULL_CLIENT_REQUEST,
+                    message_type_specific_flags=MsgTypeFlagWithEvent,
+                    serial_method=JSON,
+                ).as_bytes()
+                optional = Optional(event=EVENT_FinishConnection).as_bytes()
+                payload = str.encode("{}")
+                await self.send_event(self.ws, header, optional, payload)
+        except:
+            pass
 
     def tts_text_priority_thread(self):
         """火山引擎双流式TTS的文本处理线程"""
@@ -224,10 +252,16 @@ class TTSProvider(TTSProviderBase):
                 if self.conn.client_abort:
                     try:
                         logger.bind(tag=TAG).info("收到打断信息，终止TTS文本处理线程")
-                        asyncio.run_coroutine_threadsafe(
-                            self.cancel_session(self.conn.sentence_id),
-                            loop=self.conn.loop,
-                        )
+                        if self.enable_ws_reuse:
+                            asyncio.run_coroutine_threadsafe(
+                                self.cancel_session(self.conn.sentence_id),
+                                loop=self.conn.loop,
+                            )
+                        else:
+                            asyncio.run_coroutine_threadsafe(
+                                self.finish_connection(),
+                                loop=self.conn.loop,
+                            )
                         continue
                     except Exception as e:
                         logger.bind(tag=TAG).error(f"取消TTS会话失败: {str(e)}")
@@ -306,8 +340,9 @@ class TTSProvider(TTSProviderBase):
             #  过滤Markdown
             filtered_text = MarkdownCleaner.clean_markdown(text)
 
-            # 发送文本
-            await self.send_text(self.voice, filtered_text, self.conn.sentence_id)
+            if filtered_text:
+                # 发送文本
+                await self.send_text(self.voice, filtered_text, self.conn.sentence_id)
             return
         except Exception as e:
             logger.bind(tag=TAG).error(f"发送TTS文本失败: {str(e)}")
@@ -432,6 +467,11 @@ class TTSProvider(TTSProviderBase):
                     res = self.parser_response(msg)
                     self.print_response(res, "send_text res:")
 
+                    # 优先处理连接级别事件
+                    if res.optional.event == EVENT_ConnectionFinished:
+                        logger.bind(tag=TAG).debug(f"链接关闭成功～～")
+                        break
+
                     # 只处理当前活跃会话的响应
                     if res.optional.sessionId and self.conn.sentence_id != res.optional.sessionId:
                         # 如果是会话结束相关事件，即使会话ID不匹配也要重置状态
@@ -461,6 +501,9 @@ class TTSProvider(TTSProviderBase):
                         logger.bind(tag=TAG).debug(f"会话结束～～")
                         self.activate_session = False
                         self._process_before_stop_play_files()
+                        # 非复用模式下，会话结束后发送 FinishConnection
+                        if not self.enable_ws_reuse:
+                            await self.finish_connection()
                 except websockets.ConnectionClosed:
                     logger.bind(tag=TAG).warning("WebSocket连接已关闭")
                     break
@@ -479,6 +522,7 @@ class TTSProvider(TTSProviderBase):
                 self.ws = None
         # 监听任务退出时清理引用
         finally:
+            self.activate_session = False
             self._monitor_task = None
 
     async def send_event(
@@ -604,6 +648,19 @@ class TTSProvider(TTSProviderBase):
         audio_format="pcm",
         audio_sample_rate=16000,
     ):
+        audio_params = {
+            "format": audio_format,
+            "sample_rate": audio_sample_rate,
+            "speech_rate": self.speech_rate,
+            "loudness_rate": self.loudness_rate
+        }
+
+        # 如果是多情感音色,添加情感参数
+        if '_emo_' in self.voice:
+            if self.emotion:
+                audio_params["emotion"] = self.emotion
+                audio_params["emotion_scale"] = self.emotion_scale
+
         return str.encode(
             json.dumps(
                 {
@@ -613,12 +670,7 @@ class TTSProvider(TTSProviderBase):
                     "req_params": {
                         "text": text,
                         "speaker": speaker,
-                        "audio_params": {
-                            "format": audio_format,
-                            "sample_rate": audio_sample_rate,
-                            "speech_rate": self.speech_rate,
-                            "loudness_rate": self.loudness_rate
-                        },
+                        "audio_params": audio_params,
                         "additions": json.dumps({
                             "post_process": {
                                 "pitch": self.pitch

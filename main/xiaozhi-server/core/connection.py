@@ -135,6 +135,8 @@ class ConnectionHandler:
         # 所以涉及到ASR的变量，需要在这里定义，属于connection的私有变量
         self.asr_audio = []
         self.asr_audio_queue = queue.Queue()
+        self.current_speaker = None  # 存储当前说话人
+        self.current_language_tag = None  # 存储当前ASR识别的语言标签
 
         # llm相关变量
         self.llm_finish_task = True
@@ -250,7 +252,9 @@ class ConnectionHandler:
                         loop = asyncio.new_event_loop()
                         asyncio.set_event_loop(loop)
                         loop.run_until_complete(
-                            self.memory.save_memory(self.dialogue.dialogue)
+                            self.memory.save_memory(
+                                self.dialogue.dialogue, self.session_id
+                            )
                         )
                         self.logger.bind(tag=TAG).info("记忆保存成功")
                     except Exception as e:

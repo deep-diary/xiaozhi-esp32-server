@@ -25,7 +25,7 @@ export default {
   'header.featureManagement': '系統功能配置',
   'header.changePassword': '修改密碼',
   'header.logout': '退出登錄',
-  'header.searchPlaceholder': '輸入名稱搜索..',
+  'header.searchPlaceholder': '輸入名稱或mac搜索',
 
   // McpToolCallDialog组件文本
   'mcpToolCall.title': '工具調用',
@@ -779,6 +779,16 @@ export default {
   'roleConfig.fetchConfigFailed': '獲取配置失敗',
   'roleConfig.fetchModelsFailed': '獲取模型列表失敗',
   'roleConfig.fetchPluginsFailed': '獲取插件列表失敗',
+  'roleConfig.cannotResumeAudio': '無法恢復播放音訊',
+  'roleConfig.selectVoiceFirst': '請先選擇一個音色',
+  'roleConfig.audioLoadTimeout': '音訊載入時間較長，請稍後重試',
+  'roleConfig.cloneAudioPlayFailed': '克隆音訊播放失敗',
+  'roleConfig.cannotPlayCloneAudio': '無法播放克隆音訊',
+  'roleConfig.getCloneAudioFailed': '獲取克隆音訊失敗',
+  'roleConfig.noPreviewAudio': '該音色暫無可預覽的音訊',
+  'roleConfig.audioPlayFailed': '音訊播放失敗',
+  'roleConfig.cannotPlayAudio': '無法播放音訊',
+  'roleConfig.audioPlayError': '播放音訊過程出錯',
 
   // 功能管理對話框文本
   'functionDialog.title': '功能管理',
@@ -821,7 +831,7 @@ export default {
   'modelConfig.rag': '知識庫',
   'modelConfig.modelId': '模型ID',
   'modelConfig.modelName': '模型名稱',
-  'modelConfig.provider': '提供商',
+  'modelConfig.provider': '接口類型',
   'modelConfig.unknown': '未知',
   'modelConfig.isEnabled': '是否啟用',
   'modelConfig.isDefault': '是否默認',
@@ -917,6 +927,10 @@ export default {
   'ttsModel.selectVoiceToDelete': '請選擇要刪除的音色',
   'ttsModel.warning': '警告',
   'ttsModel.confirmDeleteVoice': '確定要刪除{count}個音色嗎？',
+  'ttsModel.voiceCodeNameLanguageRequired': '音色編碼、音色名稱和語言類型不能為空',
+  'ttsModel.deleteCancelled': '刪除已取消',
+  'ttsModel.updateSuccess': '更新成功',
+  'ttsModel.saveSuccess': '保存成功',
   'ttsModel.operationFailed': '操作失敗',
   'ttsModel.operationClosed': '操作已關閉',
 

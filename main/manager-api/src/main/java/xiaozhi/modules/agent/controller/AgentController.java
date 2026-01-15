@@ -44,6 +44,7 @@ import xiaozhi.modules.agent.entity.AgentEntity;
 import xiaozhi.modules.agent.entity.AgentTemplateEntity;
 import xiaozhi.modules.agent.service.AgentChatAudioService;
 import xiaozhi.modules.agent.service.AgentChatHistoryService;
+import xiaozhi.modules.agent.service.AgentChatSummaryService;
 import xiaozhi.modules.agent.service.AgentContextProviderService;
 import xiaozhi.modules.agent.service.AgentPluginMappingService;
 import xiaozhi.modules.agent.service.AgentService;
@@ -66,14 +67,19 @@ public class AgentController {
     private final AgentChatAudioService agentChatAudioService;
     private final AgentPluginMappingService agentPluginMappingService;
     private final AgentContextProviderService agentContextProviderService;
+    private final AgentChatSummaryService agentChatSummaryService;
     private final RedisUtils redisUtils;
 
     @GetMapping("/list")
     @Operation(summary = "获取用户智能体列表")
     @RequiresPermissions("sys:role:normal")
-    public Result<List<AgentDTO>> getUserAgents() {
+    public Result<List<AgentDTO>> getUserAgents(
+            @RequestParam(value = "keyword", required = false) String keyword,
+            @RequestParam(value = "searchType", defaultValue = "name") String searchType) {
         UserDetail user = SecurityUser.getUser();
-        List<AgentDTO> agents = agentService.getUserAgents(user.getId());
+        
+        // 直接调用整合后的getUserAgents方法，无需再区分搜索和普通查询
+        List<AgentDTO> agents = agentService.getUserAgents(user.getId(), keyword, searchType);
         return new Result<List<AgentDTO>>().ok(agents);
     }
 
@@ -117,6 +123,27 @@ public class AgentController {
         agentUpdateDTO.setSummaryMemory(dto.getSummaryMemory());
         agentService.updateAgentById(device.getAgentId(), agentUpdateDTO);
         return new Result<>();
+    }
+
+    @PostMapping("/chat-summary/{sessionId}/save")
+    @Operation(summary = "根据会话ID生成聊天记录总结并保存（异步执行）")
+    public Result<Void> generateAndSaveChatSummary(@PathVariable String sessionId) {
+        try {
+            // 异步执行总结生成任务，立即返回成功响应
+            new Thread(() -> {
+                try {
+                    agentChatSummaryService.generateAndSaveChatSummary(sessionId);
+                    System.out.println("异步执行会话 " + sessionId + " 的聊天记录总结完成");
+                } catch (Exception e) {
+                    System.err.println("异步执行会话 " + sessionId + " 的聊天记录总结失败: " + e.getMessage());
+                }
+            }).start();
+
+            // 立即返回成功响应，不等待总结生成完成
+            return new Result<Void>().ok(null);
+        } catch (Exception e) {
+            return new Result<Void>().error("启动异步总结生成任务失败: " + e.getMessage());
+        }
     }
 
     @PutMapping("/{id}")
@@ -186,6 +213,7 @@ public class AgentController {
         List<AgentChatHistoryDTO> result = agentChatHistoryService.getChatHistoryBySessionId(id, sessionId);
         return new Result<List<AgentChatHistoryDTO>>().ok(result);
     }
+
     @GetMapping("/{id}/chat-history/user")
     @Operation(summary = "获取智能体聊天记录（用户）")
     @RequiresPermissions("sys:role:normal")
@@ -246,5 +274,7 @@ public class AgentController {
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"play.wav\"")
                 .body(audioData);
     }
+
+
 
 }

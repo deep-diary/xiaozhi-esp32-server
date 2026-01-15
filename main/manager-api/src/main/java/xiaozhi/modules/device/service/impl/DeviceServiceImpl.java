@@ -496,6 +496,14 @@ public class DeviceServiceImpl extends BaseServiceImpl<DeviceDao, DeviceEntity> 
         redisUtils.delete(RedisKeys.getAgentDeviceCountById(dto.getAgentId()));
     }
 
+    @Override
+    public List<DeviceEntity> searchDevicesByMacAddress(String macAddress, Long userId) {
+        QueryWrapper<DeviceEntity> wrapper = new QueryWrapper<>();
+        wrapper.like("mac_address", macAddress);
+        wrapper.eq("user_id", userId);
+        return deviceDao.selectList(wrapper);
+    }
+
     /**
      * 生成MQTT密码签名
      * 
@@ -518,7 +526,7 @@ public class DeviceServiceImpl extends BaseServiceImpl<DeviceDao, DeviceEntity> 
      * @param username 用户名 (通常为deviceId/macAddress)
      * @return 认证token字符串
      */
-    private String generateWebSocketToken(String clientId, String username)
+    public String generateWebSocketToken(String clientId, String username)
             throws NoSuchAlgorithmException, InvalidKeyException {
         // 从系统参数获取密钥
         String secretKey = sysParamsService.getValue(Constant.SERVER_SECRET, false);

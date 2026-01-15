@@ -25,7 +25,7 @@ export default {
   'header.featureManagement': 'System Feature Management',
   'header.changePassword': 'Change Password',
   'header.logout': 'Logout',
-  'header.searchPlaceholder': 'Search by name..',
+  'header.searchPlaceholder': 'Search name or mac',
 
   // McpToolCallDialog component text
   'mcpToolCall.title': 'Tool Call',
@@ -779,6 +779,16 @@ export default {
   'roleConfig.fetchConfigFailed': 'Failed to fetch configuration',
   'roleConfig.fetchModelsFailed': 'Failed to fetch model list',
   'roleConfig.fetchPluginsFailed': 'Failed to fetch plugin list',
+  'roleConfig.cannotResumeAudio': 'Cannot resume audio playback',
+  'roleConfig.selectVoiceFirst': 'Please select a voice first',
+  'roleConfig.audioLoadTimeout': 'Audio loading takes too long, please try again later',
+  'roleConfig.cloneAudioPlayFailed': 'Clone audio playback failed',
+  'roleConfig.cannotPlayCloneAudio': 'Cannot play clone audio',
+  'roleConfig.getCloneAudioFailed': 'Failed to get clone audio',
+  'roleConfig.noPreviewAudio': 'This voice has no preview audio available',
+  'roleConfig.audioPlayFailed': 'Audio playback failed',
+  'roleConfig.cannotPlayAudio': 'Cannot play audio',
+  'roleConfig.audioPlayError': 'Error occurred during audio playback',
 
   // Function management dialog text
   'functionDialog.title': 'Function Management',
@@ -821,7 +831,7 @@ export default {
   'modelConfig.rag': 'RAG',
   'modelConfig.modelId': 'Model ID',
   'modelConfig.modelName': 'Model Name',
-  'modelConfig.provider': 'Provider',
+  'modelConfig.provider': 'Interface Type',
   'modelConfig.unknown': 'Unknown',
   'modelConfig.isEnabled': 'Enabled',
   'modelConfig.isDefault': 'Default',
@@ -919,6 +929,10 @@ export default {
   'ttsModel.selectVoiceToDelete': 'Please select voices to delete',
   'ttsModel.warning': 'Warning',
   'ttsModel.confirmDeleteVoice': 'Are you sure to delete {count} voices?',
+  'ttsModel.voiceCodeNameLanguageRequired': 'Voice code, voice name and language type cannot be empty',
+  'ttsModel.deleteCancelled': 'Deletion cancelled',
+  'ttsModel.updateSuccess': 'Update successful',
+  'ttsModel.saveSuccess': 'Save successful',
 
   // OTA Management Page Text
   'otaManagement.firmwareManagement': 'Firmware Management',
