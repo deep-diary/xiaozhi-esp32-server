@@ -19,10 +19,9 @@ TAG = __name__
 MAX_FILE_SIZE = 5 * 1024 * 1024
 
 
-class VisionHandler:
+class VisionHandler(BaseHandler):
     def __init__(self, config: dict, ws_server=None):
-        self.config = config
-        self.logger = setup_logging()
+        super().__init__(config)
         self.server = ws_server  # 保存 WebSocket 服务器引用
         # 初始化认证工具
         self.auth = AuthToken(config["server"]["auth_key"])
