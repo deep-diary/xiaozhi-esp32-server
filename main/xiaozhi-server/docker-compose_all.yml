@@ -1,14 +1,14 @@
 # Docker安装全模块
-
-version: '3'
 services:
   # Server模块
   xiaozhi-esp32-server:
     image: ghcr.nju.edu.cn/xinnan-tech/xiaozhi-esp32-server:server_latest
     container_name: xiaozhi-esp32-server
     depends_on:
-      - xiaozhi-esp32-server-db
-      - xiaozhi-esp32-server-redis
+      xiaozhi-esp32-server-db:
+        condition: service_healthy
+      xiaozhi-esp32-server-redis:
+        condition: service_healthy
     restart: always
     networks:
       - default
@@ -66,7 +66,7 @@ services:
     networks:
       - default
     ports:
-      - "3306:3306"
+      - "13306:3306"
     volumes:
       - ./mysql/data:/var/lib/mysql
     environment:

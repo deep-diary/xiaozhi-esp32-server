@@ -265,6 +265,21 @@ export class AudioRecorder {
 
             log('请至少录制1-2秒钟的音频，确保采集到足够数据', 'info');
 
+            // 检查媒体设备API是否可用
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                const protocol = window.location.protocol;
+                const hostname = window.location.hostname;
+                const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]';
+                
+                if (protocol === 'http:' && !isLocalhost) {
+                    log('无法访问麦克风：浏览器安全策略要求使用 HTTPS 连接才能访问媒体设备。请使用 HTTPS 访问此页面，或使用 localhost 访问。', 'error');
+                    throw new Error('需要 HTTPS 连接才能访问麦克风。当前使用 HTTP 访问远程域名，请切换到 HTTPS 或使用 localhost。');
+                } else {
+                    log('无法访问麦克风：浏览器不支持或未授权访问媒体设备。', 'error');
+                    throw new Error('浏览器不支持或未授权访问媒体设备。');
+                }
+            }
+
             const stream = await navigator.mediaDevices.getUserMedia({
                 audio: {
                     echoCancellation: true,
