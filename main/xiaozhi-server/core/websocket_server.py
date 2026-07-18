@@ -45,7 +45,7 @@ TAG = __name__
 class WebSocketServer:
     def __init__(self, config: dict):
         self.config = config
-        self.logger = setup_logging()
+        self.logger = setup_logging(config)
         self.config_lock = asyncio.Lock()
         modules = initialize_modules(
             self.logger,
@@ -84,7 +84,7 @@ class WebSocketServer:
         ):
             await asyncio.Future()
 
-    async def _handle_connection(self, websocket):
+    async def _handle_connection(self, websocket: websockets.ServerConnection):
         headers = dict(websocket.request.headers)
         if headers.get("device-id", None) is None:
             # 尝试从 URL 的查询参数中获取 device-id
@@ -99,7 +99,7 @@ class WebSocketServer:
             parsed_url = urlparse(request_path)
             query_params = parse_qs(parsed_url.query)
             if "device-id" not in query_params:
-                await websocket.send("端口正常，如需测试连接，请使用test_page.html")
+                await websocket.send("端口正常，如需测试连接，请启动digital-human测试")
                 await websocket.close()
                 return
             else:
@@ -263,7 +263,7 @@ class WebSocketServer:
         """根据device_id转发消息到匹配的设备连接"""
         await self.connection_manager.forward_to_device_by_device_id(device_id, message)
 
-    async def _handle_auth(self, websocket):
+    async def _handle_auth(self, websocket: websockets.ServerConnection):
         # 先认证，后建立连接
         if self.auth_enable:
             headers = dict(websocket.request.headers)

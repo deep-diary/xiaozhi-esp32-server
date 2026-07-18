@@ -39,9 +39,11 @@ import xiaozhi.modules.model.dto.ModelProviderDTO;
 import xiaozhi.modules.model.entity.ModelConfigEntity;
 import xiaozhi.modules.model.service.ModelConfigService;
 import xiaozhi.modules.model.service.ModelProviderService;
+import lombok.extern.slf4j.Slf4j;
 
 @Service
 @AllArgsConstructor
+@Slf4j
 public class ModelConfigServiceImpl extends BaseServiceImpl<ModelConfigDao, ModelConfigEntity>
         implements ModelConfigService {
 
@@ -56,8 +58,9 @@ public class ModelConfigServiceImpl extends BaseServiceImpl<ModelConfigDao, Mode
                 new QueryWrapper<ModelConfigEntity>()
                         .eq("model_type", modelType)
                         .eq("is_enabled", 1)
-                        .like(StringUtils.isNotBlank(modelName), "model_name", "%" + modelName + "%")
-                        .select("id", "model_name"));
+                        .like(StringUtils.isNotBlank(modelName), "model_name", modelName)
+                        .select("id", "model_name")
+                        .orderByAsc("sort"));
         return ConvertUtils.sourceToTarget(entities, ModelBasicInfoDTO.class);
     }
 
@@ -67,14 +70,14 @@ public class ModelConfigServiceImpl extends BaseServiceImpl<ModelConfigDao, Mode
                 new QueryWrapper<ModelConfigEntity>()
                         .eq("model_type", "llm")
                         .eq("is_enabled", 1)
-                        .like(StringUtils.isNotBlank(modelName), "model_name", "%" + modelName + "%")
+                        .like(StringUtils.isNotBlank(modelName), "model_name", modelName)
                         .select("id", "model_name", "config_json"));
 
         return entities.stream().map(item -> {
             LlmModelBasicInfoDTO dto = new LlmModelBasicInfoDTO();
             dto.setId(item.getId());
             dto.setModelName(item.getModelName());
-            String type = item.getConfigJson().get("type").toString();
+            String type = item.getConfigJson().getOrDefault("type", "").toString();
             dto.setType(type);
             return dto;
         }).toList();
@@ -91,14 +94,13 @@ public class ModelConfigServiceImpl extends BaseServiceImpl<ModelConfigDao, Mode
         Page<ModelConfigEntity> pageInfo = new Page<>(curPage, pageSize);
 
         // 添加排序规则：先按is_enabled降序，再按sort升序
-        pageInfo.addOrder(OrderItem.desc("is_enabled"));
-        pageInfo.addOrder(OrderItem.asc("sort"));
+        pageInfo.addOrder(OrderItem.desc("is_enabled"), OrderItem.asc("sort"));
 
         IPage<ModelConfigEntity> modelConfigEntityIPage = modelConfigDao.selectPage(
                 pageInfo,
                 new QueryWrapper<ModelConfigEntity>()
                         .eq("model_type", modelType)
-                        .like(StringUtils.isNotBlank(modelName), "model_name", "%" + modelName + "%"));
+                        .like(StringUtils.isNotBlank(modelName), "model_name", modelName));
 
         return getPageData(modelConfigEntityIPage, ModelConfigDTO.class);
     }
@@ -346,6 +348,7 @@ public class ModelConfigServiceImpl extends BaseServiceImpl<ModelConfigDao, Mode
         modelConfigEntity.setModelName(modelConfigBodyDTO.getModelName());
         modelConfigEntity.setSort(modelConfigBodyDTO.getSort());
         modelConfigEntity.setIsEnabled(modelConfigBodyDTO.getIsEnabled());
+        modelConfigEntity.setRemark(modelConfigBodyDTO.getRemark());
         // 3. 处理配置JSON，仅更新非敏感字段和明确修改的敏感字段
         if (modelConfigBodyDTO.getConfigJson() != null && originalEntity.getConfigJson() != null) {
             JSONObject originalJson = originalEntity.getConfigJson();
@@ -370,6 +373,14 @@ public class ModelConfigServiceImpl extends BaseServiceImpl<ModelConfigDao, Mode
                 }
             }
 
+            // 删除在新JSON中不存在的非敏感字段
+            for (String oldKey : originalJson.keySet().toArray(new String[0])) {
+                if (!modelConfigBodyDTO.getConfigJson().containsKey(oldKey)
+                        && !SensitiveDataUtils.isSensitiveField(oldKey)) {
+                    updatedJson.remove(oldKey);
+                }
+            }
+
             modelConfigEntity.setConfigJson(updatedJson);
         }
 
@@ -384,12 +395,33 @@ public class ModelConfigServiceImpl extends BaseServiceImpl<ModelConfigDao, Mode
         return value.contains("***");
     }
 
-    // 辅助方法：递归合并JSON，保留原始敏感字段
+    // 辅助方法：递归合并 JSON，保留原始敏感字段
     private void mergeJson(JSONObject original, String key, JSONObject updated) {
+        // 空值检查
+        if (original == null || updated == null) {
+            log.warn("mergeJson: original 或 updated 为 null");
+            return;
+        }
+
+        // 如果 original 中不存在 key，创建一个新的 JSON 对象
         if (!original.containsKey(key)) {
             original.put(key, new JSONObject());
         }
-        JSONObject originalChild = original.getJSONObject(key);
+
+        // 获取 original 中的子对象
+        Object originalValue = original.get(key);
+        JSONObject originalChild;
+
+        // 检查 originalValue 是否是 JSONObject 类型
+        if (originalValue instanceof JSONObject) {
+            originalChild = (JSONObject) originalValue;
+        } else {
+            // 如果不是 JSONObject 类型，记录警告并创建新的 JSON 对象
+            log.warn("mergeJson: key '{}' 的值不是 JSONObject 类型 (实际类型：{})，将创建新对象",
+                    key, originalValue != null ? originalValue.getClass().getSimpleName() : "null");
+            originalChild = new JSONObject();
+            original.put(key, originalChild);
+        }
 
         for (String childKey : updated.keySet()) {
             Object childValue = updated.get(childKey);
@@ -400,6 +432,13 @@ public class ModelConfigServiceImpl extends BaseServiceImpl<ModelConfigDao, Mode
                         (childValue instanceof String && !isMaskedValue((String) childValue))) {
                     originalChild.put(childKey, childValue);
                 }
+            }
+        }
+
+        // 删除在新 JSON 中不存在的非敏感子字段
+        for (String oldChildKey : originalChild.keySet().toArray(new String[0])) {
+            if (!updated.containsKey(oldChildKey) && !SensitiveDataUtils.isSensitiveField(oldChildKey)) {
+                originalChild.remove(oldChildKey);
             }
         }
     }
@@ -488,7 +527,7 @@ public class ModelConfigServiceImpl extends BaseServiceImpl<ModelConfigDao, Mode
             List<ModelConfigEntity> intentConfigs = modelConfigDao.selectList(
                     new QueryWrapper<ModelConfigEntity>()
                             .eq("model_type", "Intent")
-                            .like("config_json", "%" + modelId + "%"));
+                            .like("config_json", modelId));
             if (!intentConfigs.isEmpty()) {
                 throw new RenException(ErrorCode.LLM_REFERENCED_BY_INTENT);
             }

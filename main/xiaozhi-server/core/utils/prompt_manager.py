@@ -4,7 +4,12 @@
 """
 
 import os
-from typing import Dict, Any
+import asyncio
+import threading
+from typing import Dict, Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from core.connection import ConnectionHandler
 from config.logger import setup_logging
 from jinja2 import Template
 
@@ -59,9 +64,10 @@ class PromptManager:
 
         self.cache_manager = cache_manager
         self.CacheType = CacheType
-        
+
         # 初始化上下文源
         from core.utils.context_provider import ContextDataProvider
+
         self.context_provider = ContextDataProvider(config, self.logger)
         self.context_data = {}
 
@@ -115,7 +121,7 @@ class PromptManager:
         # 使用传入的提示词并缓存（如果有设备ID）
         if device_id:
             device_cache_key = f"device_prompt:{device_id}"
-            self.cache_manager.set(self.CacheType.CONFIG, device_cache_key, user_prompt)
+            self.cache_manager.set(self.CacheType.DEVICE_PROMPT, device_cache_key, user_prompt)
             self.logger.bind(tag=TAG).debug(f"设备 {device_id} 的提示词已缓存")
 
         self.logger.bind(tag=TAG).info(f"使用快速提示词: {user_prompt[:50]}...")
@@ -157,7 +163,7 @@ class PromptManager:
             self.logger.bind(tag=TAG).error(f"获取位置信息失败: {e}")
             return "未知位置"
 
-    def _get_weather_info(self, conn, location: str) -> str:
+    def _get_weather_info(self, conn: "ConnectionHandler", location: str) -> str:
         """获取天气信息"""
         try:
             # 先从缓存获取
@@ -165,12 +171,33 @@ class PromptManager:
             if cached_weather is not None:
                 return cached_weather
 
-            # 缓存未命中，调用get_weather函数获取
+            # 缓存未命中，调用 async get_weather 函数
+            # Windows ProactorEventLoop 不支持 run_coroutine_threadsafe().result()
+            # 因此用 call_soon_threadsafe 提交任务 + threading.Event 等待结果
+            # 注意：Event.wait() 只阻塞当前线程池线程，不阻塞主事件循环
             from plugins_func.functions.get_weather import get_weather
             from plugins_func.register import ActionResponse
 
-            # 调用get_weather函数
-            result = get_weather(conn, location=location, lang="zh_CN")
+            result_holder = []
+            exception_holder = []
+
+            async def _call():
+                try:
+                    result_holder.append(
+                        await get_weather(conn, location=location, lang="zh_CN")
+                    )
+                except Exception as e:
+                    exception_holder.append(e)
+                finally:
+                    event.set()
+
+            event = threading.Event()
+            conn.loop.call_soon_threadsafe(lambda: asyncio.ensure_future(_call()))
+            if not event.wait(timeout=10):
+                raise TimeoutError("获取天气信息超时")
+            if exception_holder:
+                raise exception_holder[0]
+            result = result_holder[0]
             if isinstance(result, ActionResponse):
                 weather_report = result.result
                 self.cache_manager.set(self.CacheType.WEATHER, location, weather_report)
@@ -203,14 +230,17 @@ class PromptManager:
             ):
                 # 获取天气信息（使用全局缓存）
                 self._get_weather_info(conn, local_address)
-            
+
             # 获取配置的上下文数据
             if hasattr(conn, "device_id") and conn.device_id:
-                if self.base_prompt_template and "dynamic_context" in self.base_prompt_template:
+                if (
+                    self.base_prompt_template
+                    and "dynamic_context" in self.base_prompt_template
+                ):
                     self.context_data = self.context_provider.fetch_all(conn.device_id)
                 else:
                     self.context_data = ""
-                
+
             self.logger.bind(tag=TAG).debug(f"上下文信息更新完成")
 
         except Exception as e:
@@ -244,6 +274,15 @@ class PromptManager:
                         or ""
                     )
 
+            # 获取TTS选择的语言，默认值为中文
+            language = (
+                self.config.get("TTS", {})
+                .get(self.config.get("selected_module", {}).get("TTS", ""), {})
+                .get("language")
+                or "中文"
+            )
+            self.logger.bind(tag=TAG).debug(f"获取到选择的语言: {language}")
+
             # 替换模板变量
             template = Template(self.base_prompt_template)
             enhanced_prompt = template.render(
@@ -258,6 +297,7 @@ class PromptManager:
                 device_id=device_id,
                 client_ip=client_ip,
                 dynamic_context=self.context_data,
+                language=language,
                 *args,
                 **kwargs,
             )

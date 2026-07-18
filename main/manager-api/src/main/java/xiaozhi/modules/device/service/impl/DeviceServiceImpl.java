@@ -4,13 +4,18 @@ import java.nio.charset.StandardCharsets;
 import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Collections;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.TimeZone;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -26,7 +31,12 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 
+import cn.hutool.core.map.MapUtil;
 import cn.hutool.core.util.RandomUtil;
+import cn.hutool.core.util.StrUtil;
+import cn.hutool.json.JSONArray;
+import cn.hutool.json.JSONObject;
+import cn.hutool.json.JSONUtil;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -40,6 +50,7 @@ import xiaozhi.common.service.impl.BaseServiceImpl;
 import xiaozhi.common.user.UserDetail;
 import xiaozhi.common.utils.ConvertUtils;
 import xiaozhi.common.utils.DateUtils;
+import xiaozhi.common.utils.ToolUtil;
 import xiaozhi.modules.device.dao.DeviceDao;
 import xiaozhi.modules.device.dto.DeviceManualAddDTO;
 import xiaozhi.modules.device.dto.DevicePageUserDTO;
@@ -47,6 +58,7 @@ import xiaozhi.modules.device.dto.DeviceReportReqDTO;
 import xiaozhi.modules.device.dto.DeviceReportRespDTO;
 import xiaozhi.modules.device.entity.DeviceEntity;
 import xiaozhi.modules.device.entity.OtaEntity;
+import xiaozhi.modules.device.service.DeviceAddressBookService;
 import xiaozhi.modules.device.service.DeviceService;
 import xiaozhi.modules.device.service.OtaService;
 import xiaozhi.modules.device.vo.UserShowDeviceListVO;
@@ -64,6 +76,7 @@ public class DeviceServiceImpl extends BaseServiceImpl<DeviceDao, DeviceEntity> 
     private final SysParamsService sysParamsService;
     private final RedisUtils redisUtils;
     private final OtaService otaService;
+    private final DeviceAddressBookService deviceAddressBookService;
 
     @Async
     public void updateDeviceConnectionInfo(String agentId, String deviceId, String appVersion) {
@@ -88,16 +101,16 @@ public class DeviceServiceImpl extends BaseServiceImpl<DeviceDao, DeviceEntity> 
         if (StringUtils.isBlank(activationCode)) {
             throw new RenException(ErrorCode.ACTIVATION_CODE_EMPTY);
         }
-        String deviceKey = "ota:activation:code:" + activationCode;
+        String deviceKey = RedisKeys.getOtaActivationCode(activationCode);
         Object cacheDeviceId = redisUtils.get(deviceKey);
-        if (cacheDeviceId == null) {
+        if (ToolUtil.isEmpty(cacheDeviceId)) {
             throw new RenException(ErrorCode.ACTIVATION_CODE_ERROR);
         }
         String deviceId = (String) cacheDeviceId;
         String safeDeviceId = deviceId.replace(":", "_").toLowerCase();
-        String cacheDeviceKey = String.format("ota:activation:data:%s", safeDeviceId);
+        String cacheDeviceKey = RedisKeys.getOtaDeviceActivationInfo(safeDeviceId);
         Map<String, Object> cacheMap = (Map<String, Object>) redisUtils.get(cacheDeviceKey);
-        if (cacheMap == null) {
+        if (ToolUtil.isEmpty(cacheMap)) {
             throw new RenException(ErrorCode.ACTIVATION_CODE_ERROR);
         }
         String cachedCode = (String) cacheMap.get("activation_code");
@@ -133,19 +146,49 @@ public class DeviceServiceImpl extends BaseServiceImpl<DeviceDao, DeviceEntity> 
         deviceEntity.setLastConnectedAt(currentTime);
         deviceDao.insert(deviceEntity);
 
-        // 清理redis缓存
-        redisUtils.delete(cacheDeviceKey);
-        redisUtils.delete(deviceKey);
-
-        // 添加：清除智能体设备数量缓存
-        redisUtils.delete(RedisKeys.getAgentDeviceCountById(agentId));
-
+        // 清理redis缓存、清除智能体设备数量缓存
+        redisUtils.delete(List.of(cacheDeviceKey, deviceKey, RedisKeys.getAgentDeviceCountById(agentId)));
         return true;
     }
 
+    /**
+     * 获取设备在线数据
+     */
     @Override
-    public DeviceReportRespDTO checkDeviceActive(String macAddress, String clientId,
-            DeviceReportReqDTO deviceReport) {
+    public String getDeviceOnlineData(String agentId) {
+        // 从系统参数中获取MQTT网关地址
+        String mqttGatewayUrl = sysParamsService.getValue("server.mqtt_manager_api", true);
+        if (StringUtils.isBlank(mqttGatewayUrl) || "null".equals(mqttGatewayUrl)) {
+            return "";
+        }
+        // 构建完整的URL
+        String url = StrUtil.format("http://{}/api/devices/status", mqttGatewayUrl);
+
+        // 获取当前用户的设备列表
+        UserDetail user = SecurityUser.getUser();
+        List<DeviceEntity> devices = getUserDevices(user.getId(), agentId);
+
+        // 构建deviceIds数组
+        Set<String> deviceIds = devices.stream().map(o -> {
+            String macAddress = Optional.ofNullable(o.getMacAddress()).orElse("unknown").replace(":", "_");
+            String groupId = Optional.ofNullable(o.getBoard()).orElse("GID_default").replace(":", "_");
+            return StrUtil.format("{}@@@{}@@@{}", groupId, macAddress, macAddress);
+        }).collect(Collectors.toSet());
+
+        // 构建请求入参
+        Map<String, Set<String>> params = MapUtil
+                .builder(new HashMap<String, Set<String>>())
+                .put("clientIds", deviceIds).build();
+
+        if (ToolUtil.isNotEmpty(deviceIds)) {
+            return postToMqttGateway(url, params);
+        }
+        // 返回响应
+        return "";
+    }
+
+    @Override
+    public DeviceReportRespDTO checkDeviceActive(String macAddress, String clientId, DeviceReportReqDTO deviceReport) {
         DeviceReportRespDTO response = new DeviceReportRespDTO();
         response.setServer_time(buildServerTime());
 
@@ -246,12 +289,32 @@ public class DeviceServiceImpl extends BaseServiceImpl<DeviceDao, DeviceEntity> 
     }
 
     @Override
+    public List<UserShowDeviceListVO> getUserDeviceList(Long userId, String agentId) {
+        List<DeviceEntity> devices = getUserDevices(userId, agentId);
+        return devices.stream().map(this::toUserShowDeviceListVO).toList();
+    }
+
+    private UserShowDeviceListVO toUserShowDeviceListVO(DeviceEntity device) {
+        UserShowDeviceListVO vo = ConvertUtils.sourceToTarget(device, UserShowDeviceListVO.class);
+        vo.setDeviceType(device.getBoard());
+        vo.setBoard(device.getBoard());
+        vo.setCreateDateTimestamp(toTimestamp(device.getCreateDate()));
+        vo.setLastConnectedAtTimestamp(toTimestamp(device.getLastConnectedAt()));
+        return vo;
+    }
+
+    private Long toTimestamp(Date date) {
+        return date == null ? null : date.getTime();
+    }
+
+    @Override
     public void unbindDevice(Long userId, String deviceId) {
-        // 先查询设备信息，获取agentId
+        // 先查询设备信息，获取agentId和macAddress
         DeviceEntity device = baseDao.selectById(deviceId);
         if (device == null) {
             return;
         }
+        String macAddress = device.getMacAddress();
         if (StringUtils.isNotBlank(device.getAgentId())) {
             // 清除智能体设备数量缓存
             redisUtils.delete(RedisKeys.getAgentDeviceCountById(device.getAgentId()));
@@ -261,6 +324,9 @@ public class DeviceServiceImpl extends BaseServiceImpl<DeviceDao, DeviceEntity> 
         wrapper.eq("user_id", userId);
         wrapper.eq("id", deviceId);
         baseDao.delete(wrapper);
+
+        // 删除设备相关的通讯录权限记录
+        deviceAddressBookService.deleteByMacAddresses(Collections.singletonList(macAddress));
     }
 
     @Override
@@ -279,9 +345,23 @@ public class DeviceServiceImpl extends BaseServiceImpl<DeviceDao, DeviceEntity> 
 
     @Override
     public void deleteByAgentId(String agentId) {
+        // 先查询该智能体下的所有设备，获取mac地址用于删除通讯录记录
+        QueryWrapper<DeviceEntity> queryWrapper = new QueryWrapper<>();
+        queryWrapper.eq("agent_id", agentId);
+        List<DeviceEntity> devices = baseDao.selectList(queryWrapper);
+
+        // 删除设备
         UpdateWrapper<DeviceEntity> wrapper = new UpdateWrapper<>();
         wrapper.eq("agent_id", agentId);
         baseDao.delete(wrapper);
+
+        // 批量删除这些设备相关的所有通讯录权限记录
+        if (!devices.isEmpty()) {
+            List<String> macAddresses = devices.stream()
+                    .map(DeviceEntity::getMacAddress)
+                    .collect(Collectors.toList());
+            deviceAddressBookService.deleteByMacAddresses(macAddresses);
+        }
     }
 
     @Override
@@ -297,12 +377,11 @@ public class DeviceServiceImpl extends BaseServiceImpl<DeviceDao, DeviceEntity> 
                         .like(StringUtils.isNotBlank(dto.getKeywords()), "alias", dto.getKeywords()));
         // 循环处理page获取回来的数据，返回需要的字段
         List<UserShowDeviceListVO> list = page.getRecords().stream().map(device -> {
-            UserShowDeviceListVO vo = ConvertUtils.sourceToTarget(device, UserShowDeviceListVO.class);
+            UserShowDeviceListVO vo = toUserShowDeviceListVO(device);
             // 把最后修改的时间，改为简短描述的时间
             vo.setRecentChatTime(DateUtils.getShortTime(device.getUpdateDate()));
             sysUserUtilService.assignUsername(device.getUserId(),
                     vo::setBindUserName);
-            vo.setDeviceType(device.getBoard());
             return vo;
         }).toList();
         // 计算页数
@@ -356,8 +435,7 @@ public class DeviceServiceImpl extends BaseServiceImpl<DeviceDao, DeviceEntity> 
 
     private String getDeviceCacheKey(String deviceId) {
         String safeDeviceId = deviceId.replace(":", "_").toLowerCase();
-        String dataKey = String.format("ota:activation:data:%s", safeDeviceId);
-        return dataKey;
+        return RedisKeys.getOtaDeviceActivationInfo(safeDeviceId);
     }
 
     public DeviceReportRespDTO.Activation buildActivation(String deviceId, DeviceReportReqDTO deviceReport) {
@@ -396,7 +474,7 @@ public class DeviceServiceImpl extends BaseServiceImpl<DeviceDao, DeviceEntity> 
             redisUtils.set(dataKey, dataMap);
 
             // 写入反查激活码 key
-            String codeKey = "ota:activation:code:" + newCode;
+            String codeKey = RedisKeys.getOtaActivationCode(newCode);
             redisUtils.set(codeKey, deviceId);
         }
         return code;
@@ -605,5 +683,200 @@ public class DeviceServiceImpl extends BaseServiceImpl<DeviceDao, DeviceEntity> 
         mqtt.setSubscribe_topic("devices/p2p/" + deviceIdSafeStr);
 
         return mqtt;
+    }
+
+    private String postToMqttGateway(String url, Object requestBody) {
+        String signatureKey = sysParamsService.getValue(Constant.SERVER_MQTT_SECRET, false);
+        return MqttGatewayAuthorization.postJson(
+                url,
+                JSONUtil.toJsonStr(requestBody),
+                signatureKey,
+                Instant.now());
+    }
+
+    @Override
+    public Object getDeviceTools(String deviceId) {
+        // 从系统参数中获取MQTT网关地址
+        String mqttGatewayUrl = sysParamsService.getValue("server.mqtt_manager_api", true);
+        if (StringUtils.isBlank(mqttGatewayUrl) || "null".equals(mqttGatewayUrl)) {
+            return null;
+        }
+
+        // 获取设备信息
+        DeviceEntity device = baseDao.selectById(deviceId);
+        if (device == null) {
+            return null;
+        }
+
+        // 检查设备是否属于当前用户
+        UserDetail user = SecurityUser.getUser();
+        if (!device.getUserId().equals(user.getId())) {
+            return null;
+        }
+
+        // 构建clientId
+        String macAddress = Optional.ofNullable(device.getMacAddress()).orElse("unknown").replace(":", "_");
+        String groupId = Optional.ofNullable(device.getBoard()).orElse("GID_default").replace(":", "_");
+        String clientId = StrUtil.format("{}@@@{}@@@{}", groupId, macAddress, macAddress);
+
+        // 构建完整的URL
+        String url = StrUtil.format("http://{}/api/commands/{}", mqttGatewayUrl, clientId);
+
+        // 存储所有工具列表
+        List<Object> allTools = new ArrayList<>();
+        String cursor = null;
+
+        // 循环获取分页数据
+        while (true) {
+            // 构建params
+            Map<String, Object> paramsMap = MapUtil.builder(new HashMap<String, Object>())
+                    .put("withUserTools", true)
+                    .build();
+            // 如果有cursor，添加到请求参数中
+            if (StringUtils.isNotBlank(cursor)) {
+                paramsMap.put("cursor", cursor);
+            }
+
+            // 构建请求体
+            Map<String, Object> payload = MapUtil
+                    .builder(new HashMap<String, Object>())
+                    .put("jsonrpc", "2.0")
+                    .put("id", 2)
+                    .put("method", "tools/list")
+                    .put("params", paramsMap)
+                    .build();
+
+            Map<String, Object> requestBody = MapUtil
+                    .builder(new HashMap<String, Object>())
+                    .put("type", "mcp")
+                    .put("payload", payload)
+                    .build();
+
+            String resultMessage = postToMqttGateway(url, requestBody);
+
+            // 解析响应
+            if (StringUtils.isBlank(resultMessage)) {
+                break;
+            }
+
+            JSONObject jsonObject = JSONUtil.parseObj(resultMessage);
+            if (!jsonObject.getBool("success", false)) {
+                break;
+            }
+
+            JSONObject data = jsonObject.getJSONObject("data");
+            if (data == null) {
+                break;
+            }
+
+            // 获取当前页的工具列表
+            JSONArray tools = data.getJSONArray("tools");
+            if (tools != null && !tools.isEmpty()) {
+                allTools.addAll(tools);
+            }
+
+            // 获取下一页的cursor
+            String nextCursor = data.getStr("nextCursor");
+            if (StringUtils.isBlank(nextCursor)) {
+                // 没有下一页了
+                break;
+            }
+            cursor = nextCursor;
+        }
+
+        // 构建返回结果
+        if (allTools.isEmpty()) {
+            return null;
+        }
+
+        Map<String, Object> resultData = new HashMap<>();
+        resultData.put("tools", allTools);
+        return resultData;
+    }
+
+    @Override
+    public Object callDeviceTool(String deviceId, String toolName, Map<String, Object> arguments) {
+        // 从系统参数中获取MQTT网关地址
+        String mqttGatewayUrl = sysParamsService.getValue("server.mqtt_manager_api", true);
+        if (StringUtils.isBlank(mqttGatewayUrl) || "null".equals(mqttGatewayUrl)) {
+            return null;
+        }
+
+        // 获取设备信息
+        DeviceEntity device = baseDao.selectById(deviceId);
+        if (device == null) {
+            return null;
+        }
+
+        // 检查设备是否属于当前用户
+        UserDetail user = SecurityUser.getUser();
+        if (!device.getUserId().equals(user.getId())) {
+            return null;
+        }
+
+        // 构建clientId
+        String macAddress = Optional.ofNullable(device.getMacAddress()).orElse("unknown").replace(":", "_");
+        String groupId = Optional.ofNullable(device.getBoard()).orElse("GID_default").replace(":", "_");
+        String clientId = StrUtil.format("{}@@@{}@@@{}", groupId, macAddress, macAddress);
+
+        // 构建完整的URL
+        String url = StrUtil.format("http://{}/api/commands/{}", mqttGatewayUrl, clientId);
+
+        // 构建请求体
+        Map<String, Object> params = MapUtil
+                .builder(new HashMap<String, Object>())
+                .put("name", toolName)
+                .put("arguments", arguments)
+                .build();
+
+        Map<String, Object> payload = MapUtil
+                .builder(new HashMap<String, Object>())
+                .put("jsonrpc", "2.0")
+                .put("id", 2)
+                .put("method", "tools/call")
+                .put("params", params)
+                .build();
+
+        Map<String, Object> requestBody = MapUtil
+                .builder(new HashMap<String, Object>())
+                .put("type", "mcp")
+                .put("payload", payload)
+                .build();
+
+        String resultMessage = postToMqttGateway(url, requestBody);
+
+        // 解析响应
+        if (StringUtils.isNotBlank(resultMessage)) {
+            cn.hutool.json.JSONObject jsonObject = JSONUtil.parseObj(resultMessage);
+            if (jsonObject.getBool("success", false)) {
+                cn.hutool.json.JSONObject data = jsonObject.getJSONObject("data");
+                if (data != null) {
+                    cn.hutool.json.JSONArray content = data.getJSONArray("content");
+                    if (content != null && content.size() > 0) {
+                        cn.hutool.json.JSONObject firstContent = content.getJSONObject(0);
+                        if (firstContent != null && "text".equals(firstContent.getStr("type"))) {
+                            String text = firstContent.getStr("text");
+                            if (StringUtils.isNotBlank(text)) {
+                                String trimmedText = text.trim();
+                                if (trimmedText.startsWith("{") || trimmedText.startsWith("[")) {
+                                    try {
+                                        return JSONUtil.parseObj(trimmedText);
+                                    } catch (Exception e) {
+                                        return trimmedText;
+                                    }
+                                } else if ("true".equals(trimmedText)) {
+                                    return true;
+                                } else if ("false".equals(trimmedText)) {
+                                    return false;
+                                } else {
+                                    return trimmedText;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return null;
     }
 }

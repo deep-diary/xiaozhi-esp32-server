@@ -5,6 +5,15 @@ import zhTW from './zh_TW';
 import en from './en';
 import de from './de';
 import vi from './vi';
+import ptBR from './pt_BR';
+
+import enLocale from 'element-ui/lib/locale/lang/en'
+import zhLocale from 'element-ui/lib/locale/lang/zh-CN'
+import twLocale from 'element-ui/lib/locale/lang/zh-TW'
+import deLocale from 'element-ui/lib/locale/lang/de'
+import viLocale from 'element-ui/lib/locale/lang/vi'
+import ptBRLocale from 'element-ui/lib/locale/lang/pt-br'
+
 
 Vue.use(VueI18n);
 
@@ -27,6 +36,9 @@ const getDefaultLanguage = () => {
   if (browserLang.indexOf('vi') === 0) {
     return 'vi';
   }
+  if (browserLang === 'pt-BR' || browserLang === 'pt') {
+    return 'pt_BR';
+  }
   return 'en';
 };
 
@@ -34,11 +46,12 @@ const i18n = new VueI18n({
   locale: getDefaultLanguage(),
   fallbackLocale: 'zh_CN',
   messages: {
-    'zh_CN': zhCN,
-    'zh_TW': zhTW,
-    'en': en,
-    'de': de,
-    'vi': vi
+    'zh_CN': { ...zhLocale, ...zhCN },
+    'zh_TW': { ...twLocale, ...zhTW },
+    'en': { ...en, ...enLocale },
+    'de': { ...de, ...deLocale },
+    'vi': { ...vi, ...viLocale },
+    'pt_BR': { ...ptBR, ...ptBRLocale }
   }
 });
 

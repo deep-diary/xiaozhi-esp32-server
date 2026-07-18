@@ -25,32 +25,32 @@ class LLMProvider(LLMProviderBase):
         self.is_qwen3 = self.model_name and self.model_name.lower().startswith("qwen3")
 
     def response(self, session_id, dialogue, **kwargs):
+        # 如果是qwen3模型，在用户最后一条消息中添加/no_think指令
+        if self.is_qwen3:
+            # 复制对话列表，避免修改原始对话
+            dialogue_copy = dialogue.copy()
+
+            # 找到最后一条用户消息
+            for i in range(len(dialogue_copy) - 1, -1, -1):
+                if dialogue_copy[i]["role"] == "user":
+                    # 在用户消息前添加/no_think指令
+                    dialogue_copy[i]["content"] = (
+                        "/no_think " + dialogue_copy[i]["content"]
+                    )
+                    logger.bind(tag=TAG).debug(f"为qwen3模型添加/no_think指令")
+                    break
+
+            # 使用修改后的对话
+            dialogue = dialogue_copy
+
+        responses = self.client.chat.completions.create(
+            model=self.model_name, messages=dialogue, stream=True
+        )
+        is_active = True
+        # 用于处理跨chunk的标签
+        buffer = ""
+
         try:
-            # 如果是qwen3模型，在用户最后一条消息中添加/no_think指令
-            if self.is_qwen3:
-                # 复制对话列表，避免修改原始对话
-                dialogue_copy = dialogue.copy()
-
-                # 找到最后一条用户消息
-                for i in range(len(dialogue_copy) - 1, -1, -1):
-                    if dialogue_copy[i]["role"] == "user":
-                        # 在用户消息前添加/no_think指令
-                        dialogue_copy[i]["content"] = (
-                            "/no_think " + dialogue_copy[i]["content"]
-                        )
-                        logger.bind(tag=TAG).debug(f"为qwen3模型添加/no_think指令")
-                        break
-
-                # 使用修改后的对话
-                dialogue = dialogue_copy
-
-            responses = self.client.chat.completions.create(
-                model=self.model_name, messages=dialogue, stream=True
-            )
-            is_active = True
-            # 用于处理跨chunk的标签
-            buffer = ""
-
             for chunk in responses:
                 try:
                     delta = (
@@ -88,41 +88,39 @@ class LLMProvider(LLMProviderBase):
 
                 except Exception as e:
                     logger.bind(tag=TAG).error(f"Error processing chunk: {e}")
-
-        except Exception as e:
-            logger.bind(tag=TAG).error(f"Error in Ollama response generation: {e}")
-            yield "【Ollama服务响应异常】"
+        finally:
+            responses.close()
 
     def response_with_functions(self, session_id, dialogue, functions=None):
+        # 如果是qwen3模型，在用户最后一条消息中添加/no_think指令
+        if self.is_qwen3:
+            # 复制对话列表，避免修改原始对话
+            dialogue_copy = dialogue.copy()
+
+            # 找到最后一条用户消息
+            for i in range(len(dialogue_copy) - 1, -1, -1):
+                if dialogue_copy[i]["role"] == "user":
+                    # 在用户消息前添加/no_think指令
+                    dialogue_copy[i]["content"] = (
+                        "/no_think " + dialogue_copy[i]["content"]
+                    )
+                    logger.bind(tag=TAG).debug(f"为qwen3模型添加/no_think指令")
+                    break
+
+            # 使用修改后的对话
+            dialogue = dialogue_copy
+
+        stream = self.client.chat.completions.create(
+            model=self.model_name,
+            messages=dialogue,
+            stream=True,
+            tools=functions,
+        )
+
+        is_active = True
+        buffer = ""
+
         try:
-            # 如果是qwen3模型，在用户最后一条消息中添加/no_think指令
-            if self.is_qwen3:
-                # 复制对话列表，避免修改原始对话
-                dialogue_copy = dialogue.copy()
-
-                # 找到最后一条用户消息
-                for i in range(len(dialogue_copy) - 1, -1, -1):
-                    if dialogue_copy[i]["role"] == "user":
-                        # 在用户消息前添加/no_think指令
-                        dialogue_copy[i]["content"] = (
-                            "/no_think " + dialogue_copy[i]["content"]
-                        )
-                        logger.bind(tag=TAG).debug(f"为qwen3模型添加/no_think指令")
-                        break
-
-                # 使用修改后的对话
-                dialogue = dialogue_copy
-
-            stream = self.client.chat.completions.create(
-                model=self.model_name,
-                messages=dialogue,
-                stream=True,
-                tools=functions,
-            )
-
-            is_active = True
-            buffer = ""
-
             for chunk in stream:
                 try:
                     delta = (
@@ -169,7 +167,5 @@ class LLMProvider(LLMProviderBase):
                 except Exception as e:
                     logger.bind(tag=TAG).error(f"Error processing function chunk: {e}")
                     continue
-
-        except Exception as e:
-            logger.bind(tag=TAG).error(f"Error in Ollama function call: {e}")
-            yield f"【Ollama服务响应异常: {str(e)}】", None
+        finally:
+            stream.close()

@@ -7,11 +7,10 @@ import traceback
 import websockets
 
 from typing import Callable, Any
-from core.utils.tts import MarkdownCleaner
 from config.logger import setup_logging
-from core.utils import opus_encoder_utils
 from core.utils.util import check_model_key
 from core.providers.tts.base import TTSProviderBase
+from core.utils.tts import MarkdownCleaner, convert_percentage_to_range
 from core.providers.tts.dto.dto import SentenceType, ContentType, InterfaceType
 
 
@@ -149,21 +148,52 @@ class TTSProvider(TTSProviderBase):
         self.access_token = config.get("access_token")
         self.cluster = config.get("cluster")
         self.resource_id = config.get("resource_id")
+        self.resource_type = True if self.resource_id == "seed-tts-2.0" else False
+        self.report_on_last = self.resource_type
         self.activate_session = False
         if config.get("private_voice"):
             self.voice = config.get("private_voice")
         else:
             self.voice = config.get("speaker")
-        speech_rate = config.get("speech_rate", "0")
-        loudness_rate = config.get("loudness_rate", "0")
-        pitch = config.get("pitch", "0")
-        self.speech_rate = int(speech_rate) if speech_rate else 0
-        self.loudness_rate = int(loudness_rate) if loudness_rate else 0
-        self.pitch = int(pitch) if pitch else 0
-        # 多情感音色参数
-        self.emotion = config.get("emotion", "neutral")  
-        emotion_scale = config.get("emotion_scale", "4")
-        self.emotion_scale = int(emotion_scale) if emotion_scale else 4
+
+        # 默认 audio_params 配置
+        default_audio_params = {
+            "speech_rate": 0,
+            "loudness_rate": 0
+        }
+
+        # 默认 additions 配置
+        default_additions = {
+            "aigc_metadata": {},
+            "cache_config": {},
+            "post_process": {
+                "pitch": 0
+            }
+        }
+
+        # 默认 mix_speaker 配置
+        default_mix_speaker = {}
+
+        # 合并用户配置
+        self.audio_params = {**default_audio_params, **config.get("audio_params", {})}
+        self.additions = {**default_additions, **config.get("additions", {})}
+        self.mix_speaker = {**default_mix_speaker, **config.get("mix_speaker", {})}
+
+        # 应用百分比调整（如果存在），否则使用公有化配置
+        if "ttsVolume" in config:
+            self.audio_params["loudness_rate"] = int(convert_percentage_to_range(
+                config["ttsVolume"], min_val=-50, max_val=100, base_val=0
+            ))
+
+        if "ttsRate" in config:
+            self.audio_params["speech_rate"] = int(convert_percentage_to_range(
+                config["ttsRate"], min_val=-50, max_val=100, base_val=0
+            ))
+
+        if "ttsPitch" in config:
+            self.additions["post_process"]["pitch"] = int(convert_percentage_to_range(
+                config["ttsPitch"], min_val=-12, max_val=12, base_val=0
+            ))
 
         self.ws_url = config.get("ws_url")
         self.authorization = config.get("authorization")
@@ -171,9 +201,7 @@ class TTSProvider(TTSProviderBase):
         enable_ws_reuse_value = config.get("enable_ws_reuse", True)
         self.enable_ws_reuse = False if str(enable_ws_reuse_value).lower() == 'false' else True
         self.tts_text = ""
-        self.opus_encoder = opus_encoder_utils.OpusEncoderUtils(
-            sample_rate=16000, channels=1, frame_size_ms=60
-        )
+
         model_key_msg = check_model_key("TTS", self.access_token)
         if model_key_msg:
             logger.bind(tag=TAG).error(model_key_msg)
@@ -181,6 +209,8 @@ class TTSProvider(TTSProviderBase):
     async def open_audio_channels(self, conn):
         try:
             await super().open_audio_channels(conn)
+            # 更新 audio_params 中的采样率为实际的 conn.sample_rate
+            self.audio_params["sample_rate"] = conn.sample_rate
         except Exception as e:
             logger.bind(tag=TAG).error(f"Failed to open audio channels: {str(e)}")
             self.ws = None
@@ -191,7 +221,7 @@ class TTSProvider(TTSProviderBase):
         try:
             if self.ws:
                 if self.enable_ws_reuse:
-                    logger.bind(tag=TAG).info(f"使用已有链接...")
+                    logger.bind(tag=TAG).debug(f"使用已有链接...")
                     return self.ws
                 else:
                     try:
@@ -199,6 +229,10 @@ class TTSProvider(TTSProviderBase):
                     except:
                         pass
             logger.bind(tag=TAG).debug("开始建立新连接...")
+
+            # 建立新连接前取消旧监听任务
+            await self._cancel_monitor_task()
+
             ws_header = {
                 "X-Api-App-Key": self.appId,
                 "X-Api-Access-Key": self.access_token,
@@ -242,12 +276,6 @@ class TTSProvider(TTSProviderBase):
         while not self.conn.stop_event.is_set():
             try:
                 message = self.tts_text_queue.get(timeout=1)
-                logger.bind(tag=TAG).debug(
-                    f"收到TTS任务｜{message.sentence_type.name} ｜ {message.content_type.name} | 会话ID: {self.conn.sentence_id}"
-                )
-
-                if message.sentence_type == SentenceType.FIRST:
-                    self.conn.client_abort = False
 
                 if self.conn.client_abort:
                     try:
@@ -267,7 +295,17 @@ class TTSProvider(TTSProviderBase):
                         logger.bind(tag=TAG).error(f"取消TTS会话失败: {str(e)}")
                         continue
 
+                # 过滤旧消息：检查sentence_id是否匹配
+                if message.sentence_id != self.conn.sentence_id:
+                    continue
+
+                logger.bind(tag=TAG).debug(
+                    f"收到TTS任务｜{message.sentence_type.name} ｜ {message.content_type.name} | 会话ID: {message.sentence_id}"
+                )
+
                 if message.sentence_type == SentenceType.FIRST:
+                    # 重置流式处理状态
+                    self.reset_stream_state()
                     # 初始化参数
                     try:
                         if not getattr(self.conn, "sentence_id", None): 
@@ -279,7 +317,7 @@ class TTSProvider(TTSProviderBase):
                             self.start_session(self.conn.sentence_id),
                             loop=self.conn.loop,
                         )
-                        future.result()
+                        future.result(timeout=self.tts_timeout)
                         self.before_stop_play_files.clear()
                         logger.bind(tag=TAG).debug("TTS会话启动成功")
                     except Exception as e:
@@ -296,8 +334,7 @@ class TTSProvider(TTSProviderBase):
                                 self.text_to_speak(message.content_detail, None),
                                 loop=self.conn.loop,
                             )
-                            future.result()
-                            logger.bind(tag=TAG).debug("TTS文本发送成功")
+                            future.result(timeout=self.tts_timeout)
                         except Exception as e:
                             logger.bind(tag=TAG).error(f"发送TTS文本失败: {str(e)}")
                             continue
@@ -316,7 +353,7 @@ class TTSProvider(TTSProviderBase):
                             self.finish_session(self.conn.sentence_id),
                             loop=self.conn.loop,
                         )
-                        future.result()
+                        future.result(timeout=self.tts_timeout)
                     except Exception as e:
                         logger.bind(tag=TAG).error(f"结束TTS会话失败: {str(e)}")
                         continue
@@ -341,8 +378,14 @@ class TTSProvider(TTSProviderBase):
             filtered_text = MarkdownCleaner.clean_markdown(text)
 
             if filtered_text:
-                # 发送文本
-                await self.send_text(self.voice, filtered_text, self.conn.sentence_id)
+                # 使用滑动窗口匹配处理跨分片的替换词
+                confirmed_texts, self._pending_prefix = self._match_stream_text(filtered_text)
+
+                # 发送每个确定的文本片段
+                for txt in confirmed_texts:
+                    if txt and self.ws:
+                        await self.send_text(self.voice, txt, self.conn.sentence_id)
+
             return
         except Exception as e:
             logger.bind(tag=TAG).error(f"发送TTS文本失败: {str(e)}")
@@ -357,15 +400,8 @@ class TTSProvider(TTSProviderBase):
     async def start_session(self, session_id):
         logger.bind(tag=TAG).debug(f"开始会话～～{session_id}")
         try:       
-            # 等待上一个会话结束，最多等待3次
-            for _ in range(3):
-                if not self.activate_session:
-                    break
-                logger.bind(tag=TAG).debug(f"等待上一个会话结束...")
-                await asyncio.sleep(0.1)
-            else:
-                # 等待超时，强制清除连接状态
-                logger.bind(tag=TAG).debug("等待上一个会话超时，清除连接状态...")
+            # 上个会话处于激活状态时关闭上个连接新建链接
+            if self.activate_session:
                 await self.close()
             
             # 设置会话激活标志
@@ -438,17 +474,9 @@ class TTSProvider(TTSProviderBase):
 
     async def close(self):
         """资源清理方法"""
+        await super().close()
         self.activate_session = False
-        # 取消监听任务
-        if self._monitor_task:
-            try:
-                self._monitor_task.cancel()
-                await self._monitor_task
-            except asyncio.CancelledError:
-                pass
-            except Exception as e:
-                logger.bind(tag=TAG).warning(f"关闭时取消监听任务错误: {e}")
-            self._monitor_task = None
+        await self._cancel_monitor_task()
 
         if self.ws:
             try:
@@ -483,19 +511,30 @@ class TTSProvider(TTSProviderBase):
                     if res.optional.event == EVENT_SessionCanceled:
                         logger.bind(tag=TAG).debug(f"释放服务端资源成功～～")
                         self.activate_session = False
-                    elif res.optional.event == EVENT_TTSSentenceStart:
+                    elif not self.resource_type and res.optional.event == EVENT_TTSSentenceStart:
                         json_data = json.loads(res.payload.decode("utf-8"))
                         self.tts_text = json_data.get("text", "")
                         logger.bind(tag=TAG).debug(f"句子语音生成开始: {self.tts_text}")
-                        self.tts_audio_queue.put(
-                            (SentenceType.FIRST, [], self.tts_text)
-                        )
+                        # 将TTS服务返回的替换后文本还原为原始文本，用于字幕显示
+                        display_text = self._restore_original_text(self.tts_text)
+                        self.tts_audio_queue.put((SentenceType.FIRST, [], display_text))
                     elif (
                         res.optional.event == EVENT_TTSResponse
                         and res.header.message_type == AUDIO_ONLY_RESPONSE
                     ):
+                        # 处理seed-tts-2.0文本字幕
+                        if self.resource_type:
+                            tts_text = self.get_tts_text(self.conn.sentence_id)
+                            if tts_text:
+                                logger.bind(tag=TAG).info(
+                                    f"句子语音生成成功： {tts_text}"
+                                )
+                                self.tts_audio_queue.put(
+                                    (SentenceType.FIRST, [], tts_text)
+                                )
+                                self.clear_tts_text(self.conn.sentence_id)
                         self.wav_to_opus_data_audio_raw_stream(res.payload, callback=self.handle_opus)
-                    elif res.optional.event == EVENT_TTSSentenceEnd:
+                    elif not self.resource_type and res.optional.event == EVENT_TTSSentenceEnd:
                         logger.bind(tag=TAG).info(f"句子语音生成成功：{self.tts_text}")
                     elif res.optional.event == EVENT_SessionFinished:
                         logger.bind(tag=TAG).debug(f"会话结束～～")
@@ -646,20 +685,18 @@ class TTSProvider(TTSProviderBase):
         text="",
         speaker="",
         audio_format="pcm",
-        audio_sample_rate=16000,
     ):
-        audio_params = {
-            "format": audio_format,
-            "sample_rate": audio_sample_rate,
-            "speech_rate": self.speech_rate,
-            "loudness_rate": self.loudness_rate
+        # 构建 req_params
+        req_params = {
+            "text": text,
+            "speaker": speaker,
+            "audio_params": {**self.audio_params, "format": audio_format},
+            "additions": json.dumps(self.additions)
         }
-
-        # 如果是多情感音色,添加情感参数
-        if '_emo_' in self.voice:
-            if self.emotion:
-                audio_params["emotion"] = self.emotion
-                audio_params["emotion_scale"] = self.emotion_scale
+        
+        # 如果有 mix_speaker 配置，添加到 req_params
+        if self.mix_speaker:
+            req_params["mix_speaker"] = self.mix_speaker
 
         return str.encode(
             json.dumps(
@@ -667,23 +704,39 @@ class TTSProvider(TTSProviderBase):
                     "user": {"uid": uid},
                     "event": event,
                     "namespace": "BidirectionalTTS",
-                    "req_params": {
-                        "text": text,
-                        "speaker": speaker,
-                        "audio_params": audio_params,
-                        "additions": json.dumps({
-                            "post_process": {
-                                "pitch": self.pitch
-                            }
-                        })
-                    },
-
+                    "req_params": req_params
                 }
             )
         )
 
+    def audio_to_opus_data_stream(
+        self, audio_file_path, callback: Callable[[Any], Any] = None
+    ):
+        """重写父类方法：使用独立的临时编码器处理音频文件，避免与TTS流式编码器并发冲突。
+        双流式TTS中，monitor任务在event loop线程接收TTS音频并使用self.opus_encoder编码，
+        同时tts_text_priority_thread处理音乐文件也使用self.opus_encoder，
+        共享的encoder.buffer非线程安全，并发访问会导致SILK resampler断言失败。
+        """
+        from core.utils.util import audio_to_data_stream
+        return audio_to_data_stream(
+            audio_file_path, is_opus=True, callback=callback,
+            sample_rate=self.conn.sample_rate, opus_encoder=None
+        )
+
     def wav_to_opus_data_audio_raw_stream(self, raw_data_var, is_end=False, callback: Callable[[Any], Any]=None):
         return self.opus_encoder.encode_pcm_to_opus_stream(raw_data_var, is_end, callback=callback)
+
+    async def _cancel_monitor_task(self):
+        """取消监听任务"""
+        if self._monitor_task and not self._monitor_task.done():
+            self._monitor_task.cancel()
+            try:
+                await self._monitor_task
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.bind(tag=TAG).warning(f"取消监听任务错误: {e}")
+        self._monitor_task = None
 
     def to_tts(self, text: str) -> list:
         """非流式生成音频数据，用于生成音频及测试场景

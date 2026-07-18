@@ -1,5 +1,6 @@
 //功能配置工具
 import Api from "@/apis/api";
+import store from "@/store";
 
 class FeatureManager {
     constructor() {
@@ -33,6 +34,11 @@ class FeatureManager {
                 name: 'feature.asr.name',
                 enabled: false,
                 description: 'feature.asr.description'
+            },
+            addressBook: {
+                name: 'feature.addressBook.name',
+                enabled: false,
+                description: 'feature.addressBook.description'
             }
         };
         this.currentFeatures = { ...this.defaultFeatures }; // 当前内存中的配置
@@ -72,7 +78,13 @@ class FeatureManager {
         this.initialized = true;
     }
 
-
+    /**
+     * 更新config缓存
+     */
+    updateConfigCache(config) {
+        store.commit('setPubConfig', config);
+        localStorage.setItem('pubConfig', JSON.stringify(config));
+    }
 
     /**
      * 从pub-config接口获取配置
@@ -85,6 +97,7 @@ class FeatureManager {
                 if (result && result.status === 200) {
                     // 检查是否有data字段
                     if (result.data) {
+                        const configCache = result.data.data || {};
                         // 检查是否有code字段，如果有则按照code判断
                         if (result.data.code !== undefined) {
                             if (result.data.code === 0 && result.data.data && result.data.data.systemWebMenu) {
@@ -110,6 +123,7 @@ class FeatureManager {
                                         console.warn('配置中缺少features对象，使用默认配置');
                                         resolve(this.defaultFeatures);
                                     }
+                                    configCache.systemWebMenu = config;
                                 } catch (error) {
                                     console.warn('处理systemWebMenu配置失败:', error);
                                     resolve(null);
@@ -143,6 +157,7 @@ class FeatureManager {
                                         console.warn('配置中缺少features对象，使用默认配置');
                                         resolve(this.defaultFeatures);
                                     }
+                                    configCache.systemWebMenu = config;
                                 } catch (error) {
                                     console.warn('处理systemWebMenu配置失败:', error);
                                     resolve(null);
@@ -152,6 +167,7 @@ class FeatureManager {
                                 resolve(null);
                             }
                         }
+                        this.updateConfigCache(configCache)
                     } else {
                         console.warn('接口返回数据中缺少data字段，使用默认配置');
                         resolve(null);
@@ -183,6 +199,8 @@ class FeatureManager {
             // 异步保存到后端API
             this.saveConfigToAPI(config).catch(error => {
                 console.warn('保存配置到API失败:', error);
+            }).finally(() => {
+                this.init()
             });
 
             // 触发配置变更事件
@@ -207,7 +225,7 @@ class FeatureManager {
                     paramValue: JSON.stringify({
                         features: config,
                         groups: {
-                            featureManagement: ["voiceprintRecognition", "voiceClone", "knowledgeBase", "mcpAccessPoint"],
+                            featureManagement: ["voiceprintRecognition", "voiceClone", "knowledgeBase", "mcpAccessPoint", "addressBook"],
                             voiceManagement: ["vad", "asr"]
                         }
                     }),
@@ -251,7 +269,8 @@ class FeatureManager {
             knowledgeBase: features.knowledgeBase?.enabled || false,
             mcpAccessPoint: features.mcpAccessPoint?.enabled || false,
             vad: features.vad?.enabled || false,
-            asr: features.asr?.enabled || false
+            asr: features.asr?.enabled || false,
+            addressBook: features.addressBook?.enabled || false
         };
     }
 
@@ -312,6 +331,9 @@ class FeatureManager {
         const features = this.getAllFeatures();
         Object.keys(featureUpdates).forEach(featureKey => {
             if (features[featureKey]) {
+                features[featureKey].enabled = featureUpdates[featureKey];
+            } else if (this.defaultFeatures[featureKey]) {
+                features[featureKey] = { ...this.defaultFeatures[featureKey] };
                 features[featureKey].enabled = featureUpdates[featureKey];
             }
         });

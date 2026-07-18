@@ -3,6 +3,9 @@ __pycache__/
 .idea/
 *.py[cod]
 *$py.class
+.vscode
+.claude
+AGENTS.md
 
 # C extensions
 *.so
@@ -109,11 +112,16 @@ celerybeat.pid
 # Environments
 .env
 .venv
+/.venv-*/
 env/
 venv/
 ENV/
 env.bak/
 venv.bak/
+
+# Repository-local runtimes and package-manager caches
+/.runtime/
+/main/manager-web/.npm-cache/
 
 # Spyder project settings
 .spyderproject
@@ -146,6 +154,7 @@ tmp
 .history
 .DS_Store
 main/xiaozhi-server/data
+main/xiaozhi-server/.claude
 
 main/manager-web/node_modules
 .config.yaml
@@ -184,7 +193,10 @@ uploadfile
 !main/manager-mobile/**/.env*
 !main/manager-mobile/**/*.json
 !main/xiaozhi-server/**/*.json
-
+!main/digital-human/**/*.json
+main/digital-human/wakeword_runtime/models
+main/digital-human/wakeword_runtime/sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01
+sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01.tar.bz2
 
 # Reference files
 immich_python_sdk/

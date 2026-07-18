@@ -1,10 +1,7 @@
 package xiaozhi.modules.timbre.service.impl;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import org.apache.commons.lang3.StringUtils;
@@ -44,6 +41,8 @@ import xiaozhi.modules.voiceclone.entity.VoiceCloneEntity;
 @AllArgsConstructor
 @Service
 public class TimbreServiceImpl extends BaseServiceImpl<TimbreDao, TimbreEntity> implements TimbreService {
+
+    private static final Pattern LANGUAGE_SEPARATOR = Pattern.compile("[、；;,，]");
 
     private final TimbreDao timbreDao;
     private final VoiceCloneDao voiceCloneDao;
@@ -128,14 +127,12 @@ public class TimbreServiceImpl extends BaseServiceImpl<TimbreDao, TimbreEntity> 
         if (StringUtils.isNotBlank(voiceName)) {
             queryWrapper.like("name", voiceName);
         }
-        List<TimbreEntity> timbreEntities = timbreDao.selectList(queryWrapper);
-        if (timbreEntities == null) {
-            timbreEntities = new ArrayList<>();
-        }
+        List<TimbreEntity> timbreEntities = Optional.ofNullable(timbreDao.selectList(queryWrapper)).orElseGet(ArrayList::new);
         List<VoiceDTO> voiceDTOs = timbreEntities.stream()
                 .map(entity -> {
                     VoiceDTO dto = new VoiceDTO(entity.getId(), entity.getName());
                     dto.setVoiceDemo(entity.getVoiceDemo());
+                    dto.setLanguages(entity.getLanguages()); // 设置语言类型
                     dto.setIsClone(false); // 设置为普通音色
                     return dto;
                 })
@@ -153,6 +150,7 @@ public class TimbreServiceImpl extends BaseServiceImpl<TimbreDao, TimbreEntity> 
                 voiceDTO.setName(MessageUtils.getMessage(ErrorCode.VOICE_CLONE_PREFIX) + entity.getName());
                 // 保留从数据库查询到的voiceDemo字段
                 voiceDTO.setVoiceDemo(entity.getVoiceDemo());
+                voiceDTO.setLanguages(entity.getLanguages());
                 voiceDTO.setIsClone(true); // 设置为克隆音色
                 redisUtils.set(RedisKeys.getTimbreNameById(voiceDTO.getId()), voiceDTO.getName(),
                         RedisUtils.NOT_EXPIRE);
@@ -161,6 +159,32 @@ public class TimbreServiceImpl extends BaseServiceImpl<TimbreDao, TimbreEntity> 
         }
 
         return CollectionUtil.isEmpty(voiceDTOs) ? null : voiceDTOs;
+    }
+
+    @Override
+    public String getDefaultLanguageById(String id) {
+        if (StringUtils.isBlank(id)) {
+            return null;
+        }
+
+        TimbreEntity timbre = timbreDao.selectById(id);
+        if (timbre != null) {
+            return firstNonBlankLanguage(timbre.getLanguages());
+        }
+
+        VoiceCloneEntity voiceClone = voiceCloneDao.selectById(id);
+        return voiceClone == null ? null : firstNonBlankLanguage(voiceClone.getLanguages());
+    }
+
+    private String firstNonBlankLanguage(String languages) {
+        if (StringUtils.isBlank(languages)) {
+            return null;
+        }
+        return LANGUAGE_SEPARATOR.splitAsStream(languages)
+                .map(StringUtils::trimToNull)
+                .filter(Objects::nonNull)
+                .findFirst()
+                .orElse(null);
     }
 
     /**

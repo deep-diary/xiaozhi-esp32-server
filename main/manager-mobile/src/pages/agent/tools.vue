@@ -9,10 +9,10 @@
 </route>
 
 <script lang="ts" setup>
-import { useMessage } from 'wot-design-uni'
+import { useMessage } from 'wot-design-uni/components/wd-message-box'
 import { getMcpAddress, getMcpTools } from '@/api/agent/agent'
-import { usePluginStore } from '@/store'
 import { t } from '@/i18n'
+import { usePluginStore } from '@/store'
 
 const message = useMessage()
 const pluginStore = usePluginStore()
@@ -30,8 +30,8 @@ const mcpAddress = ref('')
 const mcpTools = ref<string[]>([])
 
 // 初始化时从本地存储加载MCP地址
-if (uni.getStorageSync('cachedMcpAddress_' + agentId.value)) {
-  mcpAddress.value = uni.getStorageSync('cachedMcpAddress_' + agentId.value)
+if (uni.getStorageSync(`cachedMcpAddress_${agentId.value}`)) {
+  mcpAddress.value = uni.getStorageSync(`cachedMcpAddress_${agentId.value}`)
 }
 
 // 参数编辑相关
@@ -41,17 +41,32 @@ const tempParams = ref<Record<string, any>>({})
 const arrayTextCache = ref<Record<string, string>>({})
 const jsonTextCache = ref<Record<string, string>>({})
 
+function normalizeFunctionParams(paramInfo: any, fallback: Record<string, any> = {}) {
+  if (!paramInfo)
+    return { ...fallback }
+  if (typeof paramInfo === 'string') {
+    try {
+      const parsed = JSON.parse(paramInfo)
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : { ...fallback }
+    }
+    catch {
+      return { ...fallback }
+    }
+  }
+  return typeof paramInfo === 'object' && !Array.isArray(paramInfo) ? { ...fallback, ...paramInfo } : { ...fallback }
+}
+
 async function mergeFunctions() {
   selectedList.value = functions.value.map((mapping) => {
     const meta = allFunctions.value.find(f => f.id === mapping.pluginId)
     if (!meta) {
-      return { id: mapping.pluginId, name: mapping.pluginId, params: {} }
+      return { id: mapping.pluginId, name: mapping.pluginId, params: normalizeFunctionParams(mapping.paramInfo) }
     }
 
     return {
       id: mapping.pluginId,
       name: meta.name,
-      params: mapping.paramInfo || { ...meta.params },
+      params: normalizeFunctionParams(mapping.paramInfo, meta.params),
       fieldsMeta: meta.fieldsMeta,
     }
   })
@@ -67,16 +82,19 @@ async function mergeFunctions() {
       const address = await getMcpAddress(agentId.value)
       mcpAddress.value = address
       // 缓存到本地存储，下次打开页面可以立即显示
-      uni.setStorageSync('cachedMcpAddress_' + agentId.value, address)
-    } catch (error) {
+      uni.setStorageSync(`cachedMcpAddress_${agentId.value}`, address)
+    }
+    catch (error) {
+      mcpAddress.value = error
       console.error('获取MCP地址失败:', error)
     }
-    
+
     // 异步获取MCP工具列表，不阻塞UI显示
     try {
       const tools = await getMcpTools(agentId.value)
       mcpTools.value = tools || []
-    } catch (error) {
+    }
+    catch (error) {
       console.error('获取MCP工具列表失败:', error)
     }
   }
@@ -85,12 +103,12 @@ async function mergeFunctions() {
 // 添加插件到已选
 function selectFunction(func: any) {
   // 添加到已选列表
-  selectedList.value.push({
+  selectedList.value = [...selectedList.value, {
     id: func.id,
     name: func.name,
-    params: { ...func.params },
+    params: normalizeFunctionParams(func.params),
     fieldsMeta: func.fieldsMeta,
-  })
+  }]
 
   // 从未选列表中移除
   notSelectedList.value = notSelectedList.value.filter(
@@ -115,7 +133,7 @@ function editFunction(func: any) {
   currentFunction.value = func
 
   // 直接使用当前函数的参数
-  tempParams.value = { ...func.params }
+  tempParams.value = normalizeFunctionParams(func.params)
 
   // 初始化文本缓存
   if (func.fieldsMeta) {
@@ -206,15 +224,6 @@ function closeParamEdit() {
 
 // 返回上一页并更新配置
 function goBack() {
-  const finalFunctions = selectedList.value.map(f => ({
-    pluginId: f.id,
-    paramInfo: f.params,
-  }))
-
-  // 更新到store中
-  pluginStore.updateFunctions(finalFunctions)
-
-  // 直接返回
   uni.navigateBack()
 }
 
@@ -229,11 +238,11 @@ function copyMcpAddress() {
     data: mcpAddress.value,
     showToast: false,
     success: () => {
-        message.alert(t('agent.tools.mcpAddressCopied'))
-      },
+      message.alert(t('agent.tools.mcpAddressCopied'))
+    },
     fail: () => {
-        message.alert(t('agent.tools.copyFailed'))
-      },
+      message.alert(t('agent.tools.copyFailed'))
+    },
   })
 }
 
@@ -253,6 +262,15 @@ function getFieldRemark(field: any) {
   }
   return description
 }
+
+// 监听已选列表变化，实时更新插件配置，避免用户不点击返回按钮导致配置丢失
+watch(() => selectedList.value, (newSelectedList) => {
+  const finalFunctions = newSelectedList.map(f => ({
+    pluginId: f.id,
+    paramInfo: normalizeFunctionParams(f.params),
+  }))
+  pluginStore.updateFunctions(finalFunctions)
+})
 
 onMounted(async () => {
   // 直接从store获取数据并合并
@@ -308,7 +326,7 @@ onMounted(async () => {
                 v-if="notSelectedList.length === 0"
                 class="h-[400rpx] flex items-center justify-center"
               >
-                <wd-status-tip image="content" tip="{{ t('agent.tools.noMorePlugins') }}" />
+                <wd-status-tip image="content" :tip="t('agent.tools.noMorePlugins')" />
               </view>
               <view v-else class="p-[20rpx] space-y-[20rpx]">
                 <view
@@ -344,7 +362,7 @@ onMounted(async () => {
                 v-if="selectedList.length === 0"
                 class="h-[400rpx] flex items-center justify-center"
               >
-                <wd-status-tip image="content" tip="{{ t('agent.tools.pleaseSelectPlugin') }}" />
+                <wd-status-tip image="content" :tip="t('agent.tools.pleaseSelectPlugin')" />
               </view>
               <view v-else class="p-[20rpx] space-y-[20rpx]">
                 <view
@@ -407,11 +425,11 @@ onMounted(async () => {
               class="flex-1 rounded-[10rpx] bg-[#f5f7fb] p-[20rpx]"
             >
             <view
-                class="ml-[20rpx] h-[70rpx] flex items-center justify-center rounded-[10rpx] bg-[#1677ff] px-[20rpx] text-[24rpx] text-white"
-                @click="copyMcpAddress"
-              >
-                {{ t('agent.tools.copy') }}
-              </view>
+              class="ml-[20rpx] h-[70rpx] flex items-center justify-center rounded-[10rpx] bg-[#1677ff] px-[20rpx] text-[24rpx] text-white"
+              @click="copyMcpAddress"
+            >
+              {{ t('agent.tools.copy') }}
+            </view>
           </view>
           <!-- 工具列表 -->
           <view class="mt-[20rpx] flex-1 overflow-hidden">
@@ -442,7 +460,7 @@ onMounted(async () => {
     <!-- 参数编辑弹窗 -->
     <wd-action-sheet
       v-model="showParamDialog"
-      :title="`${t('agent.tools.paramConfiguration')} - ${currentFunction?.name || ''}`"
+      :title="`${t('agent.tools.parameterConfig')} - ${currentFunction?.name || ''}`"
       custom-header-class="h-[75vh]"
       @close="closeParamEdit"
     >
@@ -583,3 +601,9 @@ onMounted(async () => {
     </wd-action-sheet>
   </view>
 </template>
+
+<style scoped lang="scss">
+::v-deep .wd-action-sheet__header {
+  padding-right: 30rpx;
+}
+</style>

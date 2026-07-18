@@ -92,22 +92,25 @@ class TTSProvider(TTSProviderBase):
     def to_tts_single_stream(self, text, is_last=False):
         try:
             max_repeat_time = 5
+            original_text = text
             text = MarkdownCleaner.clean_markdown(text)
+            if self._correct_words_pattern:
+                text = self._correct_words_pattern.sub(lambda m: self.correct_words[m.group(0)], text)
             try:
                 asyncio.run(self.text_to_speak(text, is_last))
             except Exception as e:
                 logger.bind(tag=TAG).warning(
-                    f"语音生成失败{5 - max_repeat_time + 1}次: {text}，错误: {e}"
+                    f"语音生成失败{5 - max_repeat_time + 1}次: {original_text}，错误: {e}"
                 )
                 max_repeat_time -= 1
 
             if max_repeat_time > 0:
                 logger.bind(tag=TAG).info(
-                    f"语音生成成功: {text}，重试{5 - max_repeat_time}次"
+                    f"语音生成成功: {original_text}，重试{5 - max_repeat_time}次"
                 )
             else:
                 logger.bind(tag=TAG).error(
-                    f"语音生成失败: {text}，请检查网络或服务是否正常"
+                    f"语音生成失败: {original_text}，请检查网络或服务是否正常"
                 )
         except Exception as e:
             logger.bind(tag=TAG).error(f"Failed to generate TTS file: {e}")
@@ -174,6 +177,20 @@ class TTSProvider(TTSProviderBase):
             logger.bind(tag=TAG).error(f"TTS请求异常: {e}")
             self.tts_audio_queue.put((SentenceType.LAST, [], None))
 
+    def audio_to_pcm_data_stream(
+        self, audio_file_path, callback=None
+    ):
+        """音频文件转换为PCM编码，使用24kHz采样率"""
+        from core.utils.util import audio_to_data_stream
+        return audio_to_data_stream(audio_file_path, is_opus=False, callback=callback, sample_rate=24000, opus_encoder=None)
+
+    def audio_to_opus_data_stream(
+        self, audio_file_path, callback=None
+    ):
+        """音频文件转换为Opus编码，使用24kHz采样率和自己的编码器"""
+        from core.utils.util import audio_to_data_stream
+        return audio_to_data_stream(audio_file_path, is_opus=True, callback=callback, sample_rate=24000, opus_encoder=self.opus_encoder)
+
     async def close(self):
         """资源清理"""
         await super().close()
@@ -189,6 +206,8 @@ class TTSProvider(TTSProviderBase):
         """
         start_time = time.time()
         text = MarkdownCleaner.clean_markdown(text)
+        if self._correct_words_pattern:
+            text = self._correct_words_pattern.sub(lambda m: self.correct_words[m.group(0)], text)
 
         payload = {"text": text, "character": self.voice}
 

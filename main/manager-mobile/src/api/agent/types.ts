@@ -11,6 +11,7 @@ export interface Agent {
   summaryMemory: string | null
   lastConnectedAt: string | null
   deviceCount: number
+  tags: Record<string, string>[]
 }
 
 // 智能体创建数据类型
@@ -27,6 +28,7 @@ export interface AgentDetail {
   asrModelId: string
   vadModelId: string
   llmModelId: string
+  slmModelId: string
   vllmModelId: string
   ttsModelId: string
   ttsVoiceId: string
@@ -42,7 +44,22 @@ export interface AgentDetail {
   createdAt: string
   updater: string
   updatedAt: string
+  ttsLanguage: string | null
+  ttsVolume: number | null
+  ttsRate: number | null
+  ttsPitch: number | null
+  currentVersionNo?: number | null
+  tagNames?: string[]
   functions: AgentFunction[]
+  contextProviders: Providers[]
+}
+
+export interface Providers {
+  url: string
+  headers: Array<{
+    key: string
+    value: string
+  }>
 }
 
 export interface AgentFunction {
@@ -50,6 +67,51 @@ export interface AgentFunction {
   agentId?: string
   pluginId: string
   paramInfo: Record<string, string | number | boolean> | null
+}
+
+export interface PageData<T> {
+  list: T[]
+  total: number
+}
+
+export interface AgentSnapshotData extends Partial<AgentDetail> {
+  correctWordFileIds?: string[]
+  tagNames?: string[]
+  tags?: Array<{
+    tagName?: string
+    [key: string]: any
+  }>
+  [key: string]: any
+}
+
+export interface AgentSnapshot {
+  id: string
+  agentId: string
+  userId?: string
+  versionNo: number
+  changedFields?: string[]
+  fieldOrder?: string[]
+  source?: string
+  restoreFromSnapshotId?: string | null
+  restoreFromVersionNo?: number | null
+  currentStateToken?: string
+  currentSnapshotData?: AgentSnapshotData
+  creator?: string
+  createdAt?: string
+  snapshotData?: AgentSnapshotData
+  afterSnapshotData?: AgentSnapshotData
+}
+
+export interface AgentSnapshotPageParams {
+  page?: number
+  limit?: number
+  maxVersionNo?: number
+}
+
+export interface CorrectWordFile {
+  id: string
+  fileName: string
+  wordCount?: number
 }
 
 // 角色模板数据类型
@@ -63,6 +125,7 @@ export interface RoleTemplate {
   vllmModelId: string
   ttsModelId: string
   ttsVoiceId: string
+  ttsLanguage?: string | null
   memModelId: string
   intentModelId: string
   chatHistoryConf: number

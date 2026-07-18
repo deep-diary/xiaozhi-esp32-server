@@ -4,9 +4,18 @@ from openai.types import CompletionUsage
 from config.logger import setup_logging
 from core.utils.util import check_model_key
 from core.providers.llm.base import LLMProviderBase
+from urllib.parse import urlparse
 
 TAG = __name__
 logger = setup_logging()
+
+# 需要禁用思考模式的平台域名及其对应参数（默认关闭思考模式）
+THINKING_DISABLED_DOMAINS = {
+    "aliyuncs.com": {"enable_thinking": False},
+    "bigmodel.cn": {"thinking": {"type": "disabled"}},
+    "moonshot.cn": {"thinking": {"type": "disabled"}},
+    "volces.com": {"thinking": {"type": "disabled"}},
+}
 
 
 class LLMProvider(LLMProviderBase):
@@ -17,8 +26,22 @@ class LLMProvider(LLMProviderBase):
             self.base_url = config.get("base_url")
         else:
             self.base_url = config.get("url")
-        timeout = config.get("timeout", 300)
-        self.timeout = int(timeout) if timeout else 300
+        
+        timeout_config = config.get("timeout")
+        if isinstance(timeout_config, dict):
+            # 细粒度超时配置
+            custom_timeout = httpx.Timeout(
+                pool=timeout_config.get("pool", 2.0),
+                connect=timeout_config.get("connect", 3.0),
+                write=timeout_config.get("write", 5.0),
+                read=timeout_config.get("read", 60.0)
+            )
+        elif isinstance(timeout_config, (int, float)) and timeout_config > 0:
+            # 兼容旧的单一超时配置（整数或浮点数）
+            custom_timeout = httpx.Timeout(timeout_config)
+        else:
+            # 未配置或配置无效，使用默认值
+            custom_timeout = httpx.Timeout(300)
 
         param_defaults = {
             "max_tokens": int,
@@ -45,7 +68,7 @@ class LLMProvider(LLMProviderBase):
         model_key_msg = check_model_key("LLM", self.api_key)
         if model_key_msg:
             logger.bind(tag=TAG).error(model_key_msg)
-        self.client = openai.OpenAI(api_key=self.api_key, base_url=self.base_url, timeout=httpx.Timeout(self.timeout))
+        self.client = openai.OpenAI(api_key=self.api_key, base_url=self.base_url, timeout=custom_timeout)
 
     @staticmethod
     def normalize_dialogue(dialogue):
@@ -55,31 +78,44 @@ class LLMProvider(LLMProviderBase):
                 msg["content"] = ""
         return dialogue
 
+    def _apply_thinking_disabled(self, request_params: dict):
+        """根据域名自动禁用思考模式"""
+        parsed_url = urlparse(self.base_url)
+        domain = parsed_url.netloc
+        for disabled_domain, params in THINKING_DISABLED_DOMAINS.items():
+            if disabled_domain in domain:
+                request_params.setdefault("extra_body", {}).update(params)
+                logger.bind(tag=TAG).info(f"为域名 {domain} 禁用思考模式，参数: {params}")
+                break
+
     def response(self, session_id, dialogue, **kwargs):
-        try:
-            dialogue = self.normalize_dialogue(dialogue)
+        dialogue = self.normalize_dialogue(dialogue)
 
-            request_params = {
-                "model": self.model_name,
-                "messages": dialogue,
-                "stream": True,
-            }
+        request_params = {
+            "model": self.model_name,
+            "messages": dialogue,
+            "stream": True,
+        }
 
-            # 添加可选参数,只有当参数不为None时才添加
-            optional_params = {
-                "max_tokens": kwargs.get("max_tokens", self.max_tokens),
-                "temperature": kwargs.get("temperature", self.temperature),
-                "top_p": kwargs.get("top_p", self.top_p),
-                "frequency_penalty": kwargs.get("frequency_penalty", self.frequency_penalty),
-            }
+        # 添加可选参数,只有当参数不为None时才添加
+        optional_params = {
+            "max_tokens": kwargs.get("max_tokens", self.max_tokens),
+            "temperature": kwargs.get("temperature", self.temperature),
+            "top_p": kwargs.get("top_p", self.top_p),
+            "frequency_penalty": kwargs.get("frequency_penalty", self.frequency_penalty),
+        }
 
-            for key, value in optional_params.items():
-                if value is not None:
-                    request_params[key] = value
+        for key, value in optional_params.items():
+            if value is not None:
+                request_params[key] = value
 
-            responses = self.client.chat.completions.create(**request_params)
+        # 禁用思考模式
+        self._apply_thinking_disabled(request_params)
 
-            is_active = True
+        responses = self.client.chat.completions.create(**request_params)
+
+        is_active = True
+        try:            
             for chunk in responses:
                 try:
                     delta = chunk.choices[0].delta if getattr(chunk, "choices", None) else None
@@ -95,34 +131,36 @@ class LLMProvider(LLMProviderBase):
                         content = content.split("</think>")[-1]
                     if is_active:
                         yield content
-
-        except Exception as e:
-            logger.bind(tag=TAG).error(f"Error in response generation: {e}")
+        finally:
+            responses.close()
 
     def response_with_functions(self, session_id, dialogue, functions=None, **kwargs):
+        dialogue = self.normalize_dialogue(dialogue)
+
+        request_params = {
+            "model": self.model_name,
+            "messages": dialogue,
+            "stream": True,
+            "tools": functions,
+        }
+
+        optional_params = {
+            "max_tokens": kwargs.get("max_tokens", self.max_tokens),
+            "temperature": kwargs.get("temperature", self.temperature),
+            "top_p": kwargs.get("top_p", self.top_p),
+            "frequency_penalty": kwargs.get("frequency_penalty", self.frequency_penalty),
+        }
+
+        for key, value in optional_params.items():
+            if value is not None:
+                request_params[key] = value
+
+        # 禁用思考模式
+        self._apply_thinking_disabled(request_params)
+
+        stream = self.client.chat.completions.create(**request_params)
+
         try:
-            dialogue = self.normalize_dialogue(dialogue)
-
-            request_params = {
-                "model": self.model_name,
-                "messages": dialogue,
-                "stream": True,
-                "tools": functions,
-            }
-
-            optional_params = {
-                "max_tokens": kwargs.get("max_tokens", self.max_tokens),
-                "temperature": kwargs.get("temperature", self.temperature),
-                "top_p": kwargs.get("top_p", self.top_p),
-                "frequency_penalty": kwargs.get("frequency_penalty", self.frequency_penalty),
-            }
-
-            for key, value in optional_params.items():
-                if value is not None:
-                    request_params[key] = value
-
-            stream = self.client.chat.completions.create(**request_params)
-
             for chunk in stream:
                 if getattr(chunk, "choices", None):
                     delta = chunk.choices[0].delta
@@ -136,7 +174,5 @@ class LLMProvider(LLMProviderBase):
                         f"输出 {getattr(usage_info, 'completion_tokens', '未知')}，"
                         f"共计 {getattr(usage_info, 'total_tokens', '未知')}"
                     )
-
-        except Exception as e:
-            logger.bind(tag=TAG).error(f"Error in function call streaming: {e}")
-            yield f"【OpenAI服务响应异常: {e}】", None
+        finally:
+            stream.close()

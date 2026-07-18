@@ -147,9 +147,29 @@ public interface Constant {
     String SERVER_AUTH_ENABLED = "server.auth.enabled";
 
     /**
+     * 系统功能菜单配置
+     */
+    String SYSTEM_WEB_MENU = "system-web.menu";
+
+    /**
      * 无记忆
      */
     String MEMORY_NO_MEM = "Memory_nomem";
+
+    /**
+     * 仅上报聊天记录（不总结记忆）
+     */
+    String MEMORY_MEM_REPORT_ONLY = "Memory_mem_report_only";
+
+    /**
+     * Mem0AI记忆
+     */
+    String MEMORY_MEM0AI = "Memory_mem0ai";
+
+    /**
+     * PowerMem记忆
+     */
+    String MEMORY_POWERMEM = "Memory_powermem";
 
     /**
      * 火山引擎双声道语音克隆
@@ -304,7 +324,7 @@ public interface Constant {
     /**
      * 版本号
      */
-    public static final String VERSION = "0.8.11";
+    public static final String VERSION = "0.9.5";
 
     /**
      * 无效固件URL
